@@ -154,6 +154,23 @@ def _merge_predictions(main_file: str, new_file: str) -> int:
 # Background job runner
 # ---------------------------------------------------------------------------
 
+IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
+
+
+def _norm_path(path: str) -> str:
+    """Normalise a filepath for dedup comparison (forward slashes, lowercase)."""
+    return path.replace("\\", "/").lower()
+
+
+def _existing_filepaths() -> set:
+    """Return the set of normalised filepaths already in PREDICTIONS_FILE."""
+    if not os.path.isfile(PREDICTIONS_FILE):
+        return set()
+    with open(PREDICTIONS_FILE, encoding="utf-8") as f:
+        data = json.load(f)
+    return {_norm_path(p["filepath"]) for p in data.get("predictions", [])}
+
+
 def _set_job(job_id: str, status: str, message: str):
     _jobs[job_id]["status"] = status
     _jobs[job_id]["message"] = message
@@ -165,52 +182,55 @@ def _run_job(job_id: str, folder: str, country: Optional[str],
     tmp_path = None
     instances_json_path = None
     try:
+        # --- Deduplication: skip images already in PREDICTIONS_FILE ----------
+        _set_job(job_id, "running", "Checking for already-processed images…")
+        all_files = sorted(
+            str(p) for p in Path(folder).iterdir()
+            if p.suffix.lower() in IMAGE_EXTS
+        )
+        existing = _existing_filepaths()
+        new_files = [f for f in all_files if _norm_path(f) not in existing]
+        skipped = len(all_files) - len(new_files)
+
+        if not new_files:
+            _set_job(job_id, "done",
+                     f"Done — all {len(all_files)} image(s) already processed, nothing to do")
+            return
+
+        if skipped:
+            _set_job(job_id, "running",
+                     f"Found {len(new_files)} new image(s), skipping {skipped} already processed…")
+
+        # --- Build instances JSON (always; handles location + dedup cleanly) --
+        instances = []
+        for fp in new_files:
+            inst: dict = {"filepath": fp.replace("\\", "/")}
+            if country:
+                inst["country"] = country
+            if admin1_region:
+                inst["admin1_region"] = admin1_region
+            if latitude is not None:
+                inst["latitude"] = latitude
+            if longitude is not None:
+                inst["longitude"] = longitude
+            instances.append(inst)
+
+        fd2, instances_json_path = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd2, "w") as f:
+            json.dump({"instances": instances}, f)
+
         # Write SpeciesNet output to a temp file so the main predictions.json
         # is only touched once, atomically, after a successful run.
         fd, tmp_path = tempfile.mkstemp(suffix=".json")
         os.close(fd)
         os.unlink(tmp_path)  # SpeciesNet must create this itself; an empty file causes a JSON parse error
 
-        if latitude is not None or longitude is not None:
-            # SpeciesNet has no --latitude/--longitude CLI flags.
-            # Per-image location must be supplied via --instances_json.
-            IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
-            filepaths = sorted(
-                str(p) for p in Path(folder).iterdir()
-                if p.suffix.lower() in IMAGE_EXTS
-            )
-            instances = []
-            for fp in filepaths:
-                inst: dict = {"filepath": fp.replace("\\", "/")}
-                if country:
-                    inst["country"] = country
-                if admin1_region:
-                    inst["admin1_region"] = admin1_region
-                if latitude is not None:
-                    inst["latitude"] = latitude
-                if longitude is not None:
-                    inst["longitude"] = longitude
-                instances.append(inst)
-            fd2, instances_json_path = tempfile.mkstemp(suffix=".json")
-            with os.fdopen(fd2, "w") as f:
-                json.dump({"instances": instances}, f)
-            cmd = [
-                PYTHON_EXECUTABLE, "-u", "-m", "speciesnet.scripts.run_model",
-                "--instances_json", instances_json_path,
-                "--predictions_json", tmp_path,
-                "--bypass_prompts",
-            ]
-        else:
-            cmd = [
-                PYTHON_EXECUTABLE, "-u", "-m", "speciesnet.scripts.run_model",
-                "--folders", folder,
-                "--predictions_json", tmp_path,
-                "--bypass_prompts",
-            ]
-            if country:
-                cmd += ["--country", country]
-            if admin1_region:
-                cmd += ["--admin1_region", admin1_region]
+        cmd = [
+            PYTHON_EXECUTABLE, "-u", "-m", "speciesnet.scripts.run_model",
+            "--instances_json", instances_json_path,
+            "--predictions_json", tmp_path,
+            "--bypass_prompts",
+        ]
 
         _set_job(job_id, "running", "Running SpeciesNet inference…")
 
