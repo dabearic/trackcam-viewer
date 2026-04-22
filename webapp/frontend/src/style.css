@@ -1,0 +1,55 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #111;
+  --surface: #1c1c1c;
+  --surface2: #252525;
+  --border: #333;
+  --text: #e0e0e0;
+  --text-muted: #888;
+  --animal: #4ade80;
+  --human: #fb923c;
+  --vehicle: #60a5fa;
+  --blank: #6b7280;
+  --unknown: #a78bfa;
+  --radius: 8px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+button {
+  cursor: pointer;
+  font: inherit;
+}
+
+input, select {
+  font: inherit;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.badge--animal  { background: #14532d; color: var(--animal); }
+.badge--human   { background: #431407; color: var(--human); }
+.badge--vehicle { background: #1e3a5f; color: var(--vehicle); }
+.badge--blank   { background: #1f2937; color: var(--blank); }
+.badge--unknown { background: #2e1065; color: var(--unknown); }
