@@ -17,6 +17,7 @@
       </div>
 
       <div class="modal__body">
+        <div class="modal__left">
         <!-- Image + bbox overlay -->
         <div class="modal__image-wrap">
           <div class="modal__canvas-container" ref="containerRef">
@@ -49,6 +50,18 @@
           <button class="modal__nav modal__nav--next" @click="navigate(1)" :disabled="currentIndex >= allImages.length - 1">›</button>
           <div class="modal__position">{{ currentIndex + 1 }} / {{ allImages.length }}</div>
         </div>
+
+        <!-- Detection crop carousel -->
+        <div v-if="significantDetections.length" class="modal__carousel">
+          <DetectionCrop
+            v-for="(det, i) in significantDetections"
+            :key="i"
+            :image-src="imageSrc"
+            :det="det"
+            :color="categoryColor(det.category)"
+          />
+        </div>
+        </div><!-- end .modal__left -->
 
         <!-- Side panel -->
         <div class="modal__panel">
@@ -126,6 +139,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import DetectionCrop from './DetectionCrop.vue'
 
 const props = defineProps({
   image: Object,
@@ -309,6 +323,27 @@ watch(() => props.image, () => {
   overflow: hidden;
 }
 
+.modal__left {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.modal__carousel {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+  padding: 8px 10px;
+  background: #000;
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
 .modal__image-wrap {
   flex: 1;
   position: relative;
@@ -317,7 +352,6 @@ watch(() => props.image, () => {
   justify-content: center;
   background: #000;
   overflow: hidden;
-  min-width: 0;
 }
 
 .modal__canvas-container {
