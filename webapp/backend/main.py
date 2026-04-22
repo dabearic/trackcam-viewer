@@ -129,6 +129,7 @@ def _set_job(job_id: str, status: str, message: str):
 
 
 def _run_job(job_id: str, folder: str, country: Optional[str],
+             admin1_region: Optional[str],
              latitude: Optional[float], longitude: Optional[float]):
     tmp_path = None
     try:
@@ -145,6 +146,8 @@ def _run_job(job_id: str, folder: str, country: Optional[str],
         ]
         if country:
             cmd += ["--country", country]
+        if admin1_region:
+            cmd += ["--admin1_region", admin1_region]
         if latitude is not None:
             cmd += ["--latitude", str(latitude)]
         if longitude is not None:
@@ -220,6 +223,7 @@ def get_preview(path: str = Query(...)):
 class ProcessRequest(BaseModel):
     folder: str
     country: Optional[str] = None
+    admin1_region: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
@@ -248,7 +252,8 @@ def start_process(req: ProcessRequest):
 
     thread = threading.Thread(
         target=_run_job,
-        args=(job_id, req.folder, req.country, req.latitude, req.longitude),
+        args=(job_id, req.folder, req.country, req.admin1_region,
+              req.latitude, req.longitude),
         daemon=True,
     )
     thread.start()

@@ -23,14 +23,25 @@
             </button>
           </div>
         </div>
-        <div class="field">
-          <label class="field__label">Country <span class="field__hint">ISO 3166-1 alpha-3 (optional)</span></label>
-          <input
-            v-model="country"
-            class="field__input field__input--short"
-            placeholder="GBR"
-            maxlength="3"
-          />
+        <div class="field field--row">
+          <div class="field">
+            <label class="field__label">Country <span class="field__hint">ISO 3166-1 alpha-3 (optional)</span></label>
+            <input
+              v-model="country"
+              class="field__input"
+              placeholder="GBR"
+              maxlength="3"
+            />
+          </div>
+          <div v-if="country.toUpperCase() === 'USA'" class="field">
+            <label class="field__label">State <span class="field__hint">abbreviation</span></label>
+            <input
+              v-model="admin1Region"
+              class="field__input"
+              placeholder="CA"
+              maxlength="2"
+            />
+          </div>
         </div>
         <div class="field field--row">
           <div class="field">
@@ -79,8 +90,9 @@ import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 
 const emit = defineEmits(['close', 'done'])
 
-const folder    = ref('')
-const browsing  = ref(false)
+const folder      = ref('')
+const browsing    = ref(false)
+const admin1Region = ref('')
 const country   = ref('')
 const latitude  = ref(null)
 const longitude = ref(null)
@@ -111,7 +123,8 @@ async function submit() {
   submitError.value = ''
   try {
     const body = { folder: folder.value }
-    if (country.value)   body.country   = country.value.toUpperCase()
+    if (country.value)    body.country      = country.value.toUpperCase()
+    if (admin1Region.value) body.admin1_region = admin1Region.value.toUpperCase()
     if (latitude.value  != null) body.latitude  = latitude.value
     if (longitude.value != null) body.longitude = longitude.value
 
