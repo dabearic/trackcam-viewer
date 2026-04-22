@@ -71,6 +71,11 @@
           <span v-if="job.status === 'done'" class="progress__count">✓</span>
         </div>
 
+        <!-- Prominent error banner -->
+        <div v-if="job.status === 'error'" class="progress__error">
+          <strong>Error:</strong> {{ job.message }}
+        </div>
+
         <pre ref="logEl" class="progress__log">{{ (job.log ?? []).join('\n') }}</pre>
 
         <div class="progress__actions">
@@ -422,6 +427,17 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
   white-space: pre-wrap;
   word-break: break-all;
   scrollbar-width: thin;
+}
+
+.progress__error {
+  font-size: 13px;
+  color: #f87171;
+  background: rgba(248,113,113,0.1);
+  border: 1px solid rgba(248,113,113,0.3);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .progress__actions {
