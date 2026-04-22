@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -7,6 +8,9 @@ import threading
 import uuid
 from pathlib import Path
 from typing import Optional
+
+# Regex that matches ANSI escape sequences (colors, cursor moves, etc.)
+_ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\r')
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -217,7 +221,7 @@ def _run_job(job_id: str, folder: str, country: Optional[str],
 
         log: list[str] = []
         for line in process.stdout:
-            line = line.rstrip()
+            line = _ANSI_ESCAPE.sub('', line).rstrip()
             if line:
                 log.append(line)
                 _jobs[job_id]["log"] = log[-50:]
