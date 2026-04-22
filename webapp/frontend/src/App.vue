@@ -18,7 +18,7 @@
         :filters="filters"
         :total="predictions.length"
         :filtered="filteredPredictions.length"
-        @update="filters = { ...filters, ...$event }"
+        @update="Object.assign(filters, $event)"
       />
 
       <main class="app-main">
