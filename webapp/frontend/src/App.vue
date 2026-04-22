@@ -118,7 +118,7 @@ const groupedEvents = computed(() => {
   }
   return Array.from(groups.entries())
     .map(([ts, images]) => ({ timestamp: ts, date: parseTimestamp(ts), images }))
-    .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
 })
 
 const allSpecies = computed(() => {
