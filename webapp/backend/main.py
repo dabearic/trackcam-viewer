@@ -21,9 +21,33 @@ PREDICTIONS_FILE = os.environ.get(
 )
 
 # Python interpreter used to invoke SpeciesNet.
-# Override with PYTHON_EXECUTABLE env var if the backend runs outside the
-# speciesnet conda environment.
-PYTHON_EXECUTABLE = os.environ.get("PYTHON_EXECUTABLE", sys.executable)
+# Override with PYTHON_EXECUTABLE env var, otherwise auto-detect by finding
+# an interpreter that can import speciesnet, then fall back to sys.executable.
+def _find_python() -> str:
+    if "PYTHON_EXECUTABLE" in os.environ:
+        return os.environ["PYTHON_EXECUTABLE"]
+
+    # Common conda/venv locations to probe, in priority order
+    home = Path.home()
+    candidates = [
+        # conda envs named 'speciesnet'
+        home / "miniforge3"  / "envs" / "speciesnet" / "python.exe",
+        home / "miniconda3"  / "envs" / "speciesnet" / "python.exe",
+        home / "anaconda3"   / "envs" / "speciesnet" / "python.exe",
+        home / "miniforge3"  / "envs" / "speciesnet" / "bin" / "python",
+        home / "miniconda3"  / "envs" / "speciesnet" / "bin" / "python",
+        home / "anaconda3"   / "envs" / "speciesnet" / "bin" / "python",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+
+    # Last resort: current interpreter (works if backend is launched from the
+    # speciesnet env)
+    return sys.executable
+
+PYTHON_EXECUTABLE = _find_python()
+print(f"[TrailCam] Using Python for SpeciesNet: {PYTHON_EXECUTABLE}")
 
 # In-memory job store (sufficient for a single-user local tool)
 _jobs: dict = {}
