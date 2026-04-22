@@ -11,12 +11,17 @@
       <form v-if="!jobId" class="modal__form" @submit.prevent="submit">
         <div class="field">
           <label class="field__label">Folder path</label>
-          <input
-            v-model="folder"
-            class="field__input"
-            placeholder="C:\Users\you\Downloads\Photos-4-001"
-            required
-          />
+          <div class="field__row">
+            <input
+              v-model="folder"
+              class="field__input"
+              placeholder="C:\Users\you\Downloads\Photos-4-001"
+              required
+            />
+            <button type="button" class="btn btn--browse" :disabled="browsing" @click="browse">
+              {{ browsing ? '…' : 'Browse' }}
+            </button>
+          </div>
         </div>
         <div class="field">
           <label class="field__label">Country <span class="field__hint">ISO 3166-1 alpha-3 (optional)</span></label>
@@ -75,6 +80,7 @@ import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 const emit = defineEmits(['close', 'done'])
 
 const folder    = ref('')
+const browsing  = ref(false)
 const country   = ref('')
 const latitude  = ref(null)
 const longitude = ref(null)
@@ -89,6 +95,17 @@ let pollTimer = null
 const canClose = computed(() =>
   !jobId.value || job.value.status === 'done' || job.value.status === 'error'
 )
+
+async function browse() {
+  browsing.value = true
+  try {
+    const res = await fetch('/api/browse-folder')
+    const data = await res.json()
+    if (data.folder) folder.value = data.folder
+  } finally {
+    browsing.value = false
+  }
+}
 
 async function submit() {
   submitError.value = ''
@@ -261,6 +278,20 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 }
 
 .field__input--short { max-width: 100px; }
+
+.field__row {
+  display: flex;
+  gap: 6px;
+}
+
+.field__row .field__input {
+  flex: 1;
+}
+
+.btn--browse {
+  flex-shrink: 0;
+  padding: 7px 12px;
+}
 
 /* Buttons */
 .btn {

@@ -224,6 +224,19 @@ class ProcessRequest(BaseModel):
     longitude: Optional[float] = None
 
 
+@app.get("/api/browse-folder")
+def browse_folder():
+    """Open a native folder-picker dialog and return the selected path."""
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.withdraw()
+    root.wm_attributes("-topmost", True)
+    folder = filedialog.askdirectory(title="Select image folder")
+    root.destroy()
+    return {"folder": folder or None}
+
+
 @app.post("/api/process", status_code=202)
 def start_process(req: ProcessRequest):
     if not os.path.isdir(req.folder):
