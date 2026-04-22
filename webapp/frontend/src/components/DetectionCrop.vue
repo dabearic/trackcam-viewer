@@ -46,11 +46,11 @@ watch(() => [props.imageSrc, props.det], draw)
 
 <style scoped>
 .crop {
-  position: relative;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
   border-radius: 4px;
   overflow: hidden;
-  background: #000;
   border: 1px solid var(--border);
 }
 
@@ -61,15 +61,12 @@ watch(() => [props.imageSrc, props.det], draw)
 }
 
 .crop__badge {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
   padding: 2px 5px;
   font-size: 10px;
   font-weight: 600;
   color: #000;
   text-align: center;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 </style>
