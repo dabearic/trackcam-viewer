@@ -10,6 +10,7 @@
         <span>{{ stats.images }} images</span>
         <span>{{ stats.species }} species</span>
       </div>
+      <button class="app-header__process-btn" @click="showProcess = true">+ Add Photos</button>
     </header>
 
     <div class="app-body">
@@ -49,6 +50,12 @@
       :day="selectedDay"
       @close="selectedDay = null"
     />
+
+    <ProcessModal
+      v-if="showProcess"
+      @close="showProcess = false"
+      @done="onProcessDone"
+    />
   </div>
 </template>
 
@@ -58,12 +65,14 @@ import FilterBar from './components/FilterBar.vue'
 import ImageGallery from './components/ImageGallery.vue'
 import ImageModal from './components/ImageModal.vue'
 import DaySummary from './components/DaySummary.vue'
+import ProcessModal from './components/ProcessModal.vue'
 
 const predictions = ref([])
 const loading = ref(true)
 const error = ref(null)
 const selectedImage = ref(null)
 const selectedDay = ref(null)
+const showProcess = ref(false)
 const dataDateFrom = ref('')
 const dataDateTo   = ref('')
 
@@ -145,6 +154,28 @@ function openModal(image) {
   selectedImage.value = image
 }
 
+async function onProcessDone() {
+  showProcess.value = false
+  loading.value = true
+  try {
+    const res = await fetch('/api/predictions')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    predictions.value = data.predictions
+    const dates = data.predictions.map(p => filenameToDate(p.filename)).sort()
+    if (dates.length) {
+      dataDateFrom.value = dates[0]
+      dataDateTo.value   = dates[dates.length - 1]
+      filters.dateFrom   = dates[0]
+      filters.dateTo     = dates[dates.length - 1]
+    }
+  } catch (e) {
+    error.value = `Failed to reload predictions: ${e.message}`
+  } finally {
+    loading.value = false
+  }
+}
+
 function filenameToDate(filename) {
   const ts = filename.substring(0, 8)
   return `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)}`
@@ -208,6 +239,21 @@ onMounted(async () => {
   color: var(--text-muted);
   font-size: 13px;
 }
+
+.app-header__process-btn {
+  background: #14532d;
+  border: 1px solid var(--animal);
+  border-radius: var(--radius);
+  color: var(--animal);
+  padding: 5px 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.app-header__process-btn:hover { background: #166534; }
 
 .app-body {
   display: flex;
