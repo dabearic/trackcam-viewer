@@ -21,12 +21,11 @@
           loading="lazy"
         />
         <div class="gallery__badge-row">
-          <span v-if="img.prediction" :class="`badge badge--${getCategory(img)}`">
-            {{ capitalize(img.prediction.common_name) }}
-          </span>
-          <span v-if="img.prediction_score != null" class="gallery__score">
-            {{ (img.prediction_score * 100).toFixed(0) }}%
-          </span>
+          <span
+            v-for="det in detectionCounts(img)"
+            :key="det.label"
+            :class="`badge badge--${det.label}`"
+          >{{ det.label +": " }} {{ det.count}} </span>
         </div>
       </button>
     </template>
@@ -50,17 +49,20 @@ function formatTime(d) {
   return d.toTimeString().slice(0, 8)
 }
 
-function capitalize(s) {
-  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
-}
+// category key matches CSS badge classes: animal / human / vehicle
+const CATEGORY_LABEL = { '1': 'animal', '2': 'human', '3': 'vehicle' }
 
-function getCategory(img) {
-  const name = img.prediction?.common_name?.toLowerCase()
-  if (!name) return 'unknown'
-  if (name === 'blank') return 'blank'
-  if (name === 'human') return 'human'
-  if (name === 'vehicle') return 'vehicle'
-  return 'animal'
+function detectionCounts(img) {
+  const counts = {}
+  for (const det of img.detections ?? []) {
+    if (det.conf < 0.7) continue
+    const label = CATEGORY_LABEL[det.category] ?? det.label
+    counts[label] = (counts[label] ?? 0) + 1
+  }
+  return Object.entries(counts).map(([label, count]) => ({ label, count }))
+}
+function getDetections(img){
+  return img.detections?.names
 }
 </script>
 
@@ -136,10 +138,4 @@ function getCategory(img) {
   gap: 4px;
 }
 
-.gallery__score {
-  font-size: 11px;
-  font-weight: 600;
-  color: #fff;
-  opacity: 0.85;
-}
 </style>
