@@ -156,6 +156,7 @@ def _run_job(job_id: str, folder: str, country: Optional[str],
              admin1_region: Optional[str],
              latitude: Optional[float], longitude: Optional[float]):
     tmp_path = None
+    instances_json_path = None
     try:
         # Write SpeciesNet output to a temp file so the main predictions.json
         # is only touched once, atomically, after a successful run.
@@ -163,20 +164,46 @@ def _run_job(job_id: str, folder: str, country: Optional[str],
         os.close(fd)
         os.unlink(tmp_path)  # SpeciesNet must create this itself; an empty file causes a JSON parse error
 
-        cmd = [
-            PYTHON_EXECUTABLE, "-u", "-m", "speciesnet.scripts.run_model",
-            "--folders", folder,
-            "--predictions_json", tmp_path,
-            "--bypass_prompts",
-        ]
-        if country:
-            cmd += ["--country", country]
-        if admin1_region:
-            cmd += ["--admin1_region", admin1_region]
-        if latitude is not None:
-            cmd += ["--latitude", str(latitude)]
-        if longitude is not None:
-            cmd += ["--longitude", str(longitude)]
+        if latitude is not None or longitude is not None:
+            # SpeciesNet has no --latitude/--longitude CLI flags.
+            # Per-image location must be supplied via --instances_json.
+            IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
+            filepaths = sorted(
+                str(p) for p in Path(folder).iterdir()
+                if p.suffix.lower() in IMAGE_EXTS
+            )
+            instances = []
+            for fp in filepaths:
+                inst: dict = {"filepath": fp.replace("\\", "/")}
+                if country:
+                    inst["country"] = country
+                if admin1_region:
+                    inst["admin1_region"] = admin1_region
+                if latitude is not None:
+                    inst["latitude"] = latitude
+                if longitude is not None:
+                    inst["longitude"] = longitude
+                instances.append(inst)
+            fd2, instances_json_path = tempfile.mkstemp(suffix=".json")
+            with os.fdopen(fd2, "w") as f:
+                json.dump({"instances": instances}, f)
+            cmd = [
+                PYTHON_EXECUTABLE, "-u", "-m", "speciesnet.scripts.run_model",
+                "--instances_json", instances_json_path,
+                "--predictions_json", tmp_path,
+                "--bypass_prompts",
+            ]
+        else:
+            cmd = [
+                PYTHON_EXECUTABLE, "-u", "-m", "speciesnet.scripts.run_model",
+                "--folders", folder,
+                "--predictions_json", tmp_path,
+                "--bypass_prompts",
+            ]
+            if country:
+                cmd += ["--country", country]
+            if admin1_region:
+                cmd += ["--admin1_region", admin1_region]
 
         _set_job(job_id, "running", "Running SpeciesNet inference…")
 
@@ -213,6 +240,8 @@ def _run_job(job_id: str, folder: str, country: Optional[str],
     finally:
         if tmp_path and os.path.isfile(tmp_path):
             os.unlink(tmp_path)
+        if instances_json_path and os.path.isfile(instances_json_path):
+            os.unlink(instances_json_path)
 
 
 # ---------------------------------------------------------------------------
