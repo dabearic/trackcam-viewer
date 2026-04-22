@@ -18,6 +18,8 @@
         :filters="filters"
         :total="predictions.length"
         :filtered="filteredPredictions.length"
+        :date-from-min="dataDateFrom"
+        :date-to-max="dataDateTo"
         @update="Object.assign(filters, $event)"
       />
 
@@ -62,6 +64,8 @@ const loading = ref(true)
 const error = ref(null)
 const selectedImage = ref(null)
 const selectedDay = ref(null)
+const dataDateFrom = ref('')
+const dataDateTo   = ref('')
 
 const filters = reactive({
   species: '',
@@ -141,12 +145,25 @@ function openModal(image) {
   selectedImage.value = image
 }
 
+function filenameToDate(filename) {
+  const ts = filename.substring(0, 8)
+  return `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)}`
+}
+
 onMounted(async () => {
   try {
     const res = await fetch('/api/predictions')
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
     predictions.value = data.predictions
+
+    const dates = data.predictions.map(p => filenameToDate(p.filename)).sort()
+    if (dates.length) {
+      dataDateFrom.value = dates[0]
+      dataDateTo.value   = dates[dates.length - 1]
+      filters.dateFrom   = dates[0]
+      filters.dateTo     = dates[dates.length - 1]
+    }
   } catch (e) {
     error.value = `Failed to load predictions: ${e.message}`
   } finally {

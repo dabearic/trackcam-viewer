@@ -28,12 +28,16 @@
         type="date"
         class="filterbar__date"
         :value="filters.dateFrom"
+        :min="dateFromMin"
+        :max="filters.dateTo || dateToMax"
         @change="emit('update', { dateFrom: $event.target.value })"
       />
       <input
         type="date"
         class="filterbar__date"
         :value="filters.dateTo"
+        :min="filters.dateFrom || dateFromMin"
+        :max="dateToMax"
         @change="emit('update', { dateTo: $event.target.value })"
       />
     </div>
@@ -65,6 +69,8 @@ const props = defineProps({
   filters: Object,
   total: Number,
   filtered: Number,
+  dateFromMin: String,
+  dateToMax: String,
 })
 
 const emit = defineEmits(['update'])
@@ -93,8 +99,8 @@ function clearFilters() {
     species: '',
     minConfidence: 0,
     categories: CATEGORIES.map(c => c.key),
-    dateFrom: '',
-    dateTo: '',
+    dateFrom: props.dateFromMin ?? '',
+    dateTo: props.dateToMax ?? '',
   })
 }
 </script>
