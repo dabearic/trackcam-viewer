@@ -29,6 +29,7 @@
           v-else
           :events="groupedEvents"
           @select="openModal"
+          @day-select="selectedDay = $event"
         />
       </main>
     </div>
@@ -40,6 +41,12 @@
       @close="selectedImage = null"
       @navigate="openModal"
     />
+
+    <DaySummary
+      v-if="selectedDay"
+      :day="selectedDay"
+      @close="selectedDay = null"
+    />
   </div>
 </template>
 
@@ -48,11 +55,13 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import FilterBar from './components/FilterBar.vue'
 import ImageGallery from './components/ImageGallery.vue'
 import ImageModal from './components/ImageModal.vue'
+import DaySummary from './components/DaySummary.vue'
 
 const predictions = ref([])
 const loading = ref(true)
 const error = ref(null)
 const selectedImage = ref(null)
+const selectedDay = ref(null)
 
 const filters = reactive({
   species: '',
