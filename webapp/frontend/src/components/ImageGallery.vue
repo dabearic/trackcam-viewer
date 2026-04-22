@@ -134,7 +134,9 @@ function getDetections(img){
   background: linear-gradient(transparent, rgba(0,0,0,0.75));
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 3px;
   gap: 4px;
 }
 
