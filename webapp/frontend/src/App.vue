@@ -67,6 +67,8 @@ const filters = reactive({
   species: '',
   minConfidence: 0,
   categories: ['animal', 'human', 'vehicle', 'blank', 'unknown'],
+  dateFrom: '',
+  dateTo: '',
 })
 
 function getCategory(pred) {
@@ -82,11 +84,22 @@ function getCategory(pred) {
 }
 
 const filteredPredictions = computed(() => {
+  // Pre-parse date bounds once (YYYY-MM-DD strings compare lexicographically)
+  const from = filters.dateFrom  // "2026-03-30" or ""
+  const to   = filters.dateTo
+
   return predictions.value.filter(p => {
     const cat = getCategory(p)
     if (!filters.categories.includes(cat)) return false
     if (filters.species && p.prediction?.common_name !== filters.species) return false
     if (filters.minConfidence > 0 && (p.prediction_score ?? 0) < filters.minConfidence / 100) return false
+    if (from || to) {
+      // Extract YYYY-MM-DD from filename prefix YYYYMMDDHHMMSS
+      const ts = p.filename.substring(0, 8)
+      const date = `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)}`
+      if (from && date < from) return false
+      if (to   && date > to)   return false
+    }
     return true
   })
 })

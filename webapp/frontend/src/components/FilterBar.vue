@@ -23,6 +23,22 @@
     </div>
 
     <div class="filterbar__section">
+      <label class="filterbar__label">Date range</label>
+      <input
+        type="date"
+        class="filterbar__date"
+        :value="filters.dateFrom"
+        @change="emit('update', { dateFrom: $event.target.value })"
+      />
+      <input
+        type="date"
+        class="filterbar__date"
+        :value="filters.dateTo"
+        @change="emit('update', { dateTo: $event.target.value })"
+      />
+    </div>
+
+    <div class="filterbar__section">
       <label class="filterbar__label">Category</label>
       <div class="filterbar__checks">
         <label v-for="cat in CATEGORIES" :key="cat.key" class="filterbar__check">
@@ -77,6 +93,8 @@ function clearFilters() {
     species: '',
     minConfidence: 0,
     categories: CATEGORIES.map(c => c.key),
+    dateFrom: '',
+    dateTo: '',
   })
 }
 </script>
@@ -127,6 +145,16 @@ function clearFilters() {
 .filterbar__range {
   width: 100%;
   accent-color: var(--animal);
+}
+
+.filterbar__date {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 6px 8px;
+  width: 100%;
+  color-scheme: dark;
 }
 
 .filterbar__checks {
