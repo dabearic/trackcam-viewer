@@ -71,12 +71,32 @@
           <span v-if="job.status === 'done'" class="progress__count">✓</span>
         </div>
 
+        <!-- Per-stage progress bars -->
+        <div v-if="progressEntries.length" class="progress__stages">
+          <div v-for="[label, p] in progressEntries" :key="label" class="progress__stage">
+            <div class="progress__stage-header">
+              <span class="progress__stage-label">{{ label }}</span>
+              <span class="progress__stage-count">{{ p.current }}/{{ p.total }}</span>
+              <span class="progress__stage-pct" :class="p.percent === 100 ? 'progress__stage-pct--done' : ''">
+                {{ p.percent }}%
+              </span>
+            </div>
+            <div class="progress__stage-track">
+              <div
+                class="progress__stage-fill"
+                :class="p.percent === 100 ? 'progress__stage-fill--done' : ''"
+                :style="{ width: p.percent + '%' }"
+              ></div>
+            </div>
+          </div>
+        </div>
+
         <!-- Prominent error banner -->
         <div v-if="job.status === 'error'" class="progress__error">
           <strong>Error:</strong> {{ job.message }}
         </div>
 
-        <pre ref="logEl" class="progress__log">{{ (job.log ?? []).join('\n') }}</pre>
+        <pre v-if="job.log?.length" ref="logEl" class="progress__log">{{ job.log.join('\n') }}</pre>
 
         <div class="progress__actions">
           <button
@@ -119,6 +139,10 @@ let pollTimer = null
 
 const canClose = computed(() =>
   !jobId.value || job.value.status === 'done' || job.value.status === 'error'
+)
+
+const progressEntries = computed(() =>
+  Object.entries(job.value.progress ?? {})
 )
 
 function useCurrentLocation() {
@@ -196,7 +220,7 @@ async function pollJob() {
 
 function reset() {
   jobId.value = null
-  job.value = { status: 'running', message: 'Queued', log: [] }
+  job.value = { status: 'running', message: 'Queued', log: [], progress: {} }
   submitError.value = ''
 }
 
@@ -427,6 +451,66 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
   white-space: pre-wrap;
   word-break: break-all;
   scrollbar-width: thin;
+}
+
+/* Stage progress bars */
+.progress__stages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.progress__stage {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.progress__stage-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.progress__stage-label {
+  flex: 1;
+  color: var(--text-muted);
+}
+
+.progress__stage-count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.progress__stage-pct {
+  width: 34px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.progress__stage-pct--done {
+  color: var(--animal);
+}
+
+.progress__stage-track {
+  height: 5px;
+  background: var(--surface2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress__stage-fill {
+  height: 100%;
+  background: var(--vehicle);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.progress__stage-fill--done {
+  background: var(--animal);
 }
 
 .progress__error {

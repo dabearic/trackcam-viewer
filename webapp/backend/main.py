@@ -12,6 +12,9 @@ from typing import Optional
 # Regex that matches ANSI escape sequences (colors, cursor moves, etc.)
 _ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\r')
 
+# Matches tqdm progress lines e.g. "Detector preprocess   :  45%|████| 11/24 [00:03<00:04]"
+_TQDM_RE = re.compile(r'^(.+?)\s*:\s*(\d+)%\|[^|]*\|\s*(\d+)/(\d+)')
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -224,7 +227,18 @@ def _run_job(job_id: str, folder: str, country: Optional[str],
         log: list[str] = []
         for line in process.stdout:
             line = _ANSI_ESCAPE.sub('', line).rstrip()
-            if line:
+            if not line:
+                continue
+            m = _TQDM_RE.match(line)
+            if m:
+                # Progress bar line — update structured progress, skip the log
+                label = m.group(1).strip()
+                _jobs[job_id]["progress"][label] = {
+                    "percent": int(m.group(2)),
+                    "current": int(m.group(3)),
+                    "total":   int(m.group(4)),
+                }
+            else:
                 log.append(line)
                 _jobs[job_id]["log"] = log[-50:]
                 _jobs[job_id]["message"] = line
@@ -308,7 +322,7 @@ def start_process(req: ProcessRequest):
                             detail=f"Folder not found: {req.folder}")
 
     job_id = uuid.uuid4().hex[:8]
-    _jobs[job_id] = {"status": "running", "message": "Queued", "log": []}
+    _jobs[job_id] = {"status": "running", "message": "Queued", "log": [], "progress": {}}
 
     thread = threading.Thread(
         target=_run_job,
