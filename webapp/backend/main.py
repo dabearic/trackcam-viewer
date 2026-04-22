@@ -1,9 +1,16 @@
 import json
 import os
+import subprocess
+import sys
+import tempfile
+import threading
+import uuid
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 import uvicorn
 
 app = FastAPI(title="TrailCam Viewer API")
@@ -13,6 +20,18 @@ PREDICTIONS_FILE = os.environ.get(
     r"C:\Users\dabea\Downloads\Photos-3-001\predictions.json",
 )
 
+# Python interpreter used to invoke SpeciesNet.
+# Override with PYTHON_EXECUTABLE env var if the backend runs outside the
+# speciesnet conda environment.
+PYTHON_EXECUTABLE = os.environ.get("PYTHON_EXECUTABLE", sys.executable)
+
+# In-memory job store (sufficient for a single-user local tool)
+_jobs: dict = {}
+
+
+# ---------------------------------------------------------------------------
+# Label parsing
+# ---------------------------------------------------------------------------
 
 def parse_label(label_str: str) -> dict:
     """Parse 'uuid;class;order;family;genus;species;common_name' into a dict."""
@@ -70,6 +89,108 @@ def load_predictions() -> list:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Predictions merge
+# ---------------------------------------------------------------------------
+
+def _merge_predictions(main_file: str, new_file: str) -> int:
+    """Merge new_file into main_file. Returns count of new/updated predictions."""
+    main_data: dict = {"predictions": []}
+    if os.path.isfile(main_file):
+        with open(main_file, encoding="utf-8") as f:
+            main_data = json.load(f)
+
+    with open(new_file, encoding="utf-8") as f:
+        new_data = json.load(f)
+
+    idx = {p["filepath"]: i for i, p in enumerate(main_data["predictions"])}
+    count = 0
+    for pred in new_data["predictions"]:
+        fp = pred["filepath"]
+        if fp in idx:
+            main_data["predictions"][idx[fp]] = pred
+        else:
+            main_data["predictions"].append(pred)
+        count += 1
+
+    with open(main_file, "w", encoding="utf-8") as f:
+        json.dump(main_data, f, indent=1)
+
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Background job runner
+# ---------------------------------------------------------------------------
+
+def _set_job(job_id: str, status: str, message: str):
+    _jobs[job_id]["status"] = status
+    _jobs[job_id]["message"] = message
+
+
+def _run_job(job_id: str, folder: str, country: Optional[str],
+             latitude: Optional[float], longitude: Optional[float]):
+    tmp_path = None
+    try:
+        # Write SpeciesNet output to a temp file so the main predictions.json
+        # is only touched once, atomically, after a successful run.
+        fd, tmp_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+
+        cmd = [
+            PYTHON_EXECUTABLE, "-m", "speciesnet.scripts.run_model",
+            "--folders", folder,
+            "--predictions_json", tmp_path,
+            "--bypass_prompts",
+        ]
+        if country:
+            cmd += ["--country", country]
+        if latitude is not None:
+            cmd += ["--latitude", str(latitude)]
+        if longitude is not None:
+            cmd += ["--longitude", str(longitude)]
+
+        _set_job(job_id, "running", "Running SpeciesNet inference…")
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
+        log: list[str] = []
+        for line in process.stdout:
+            line = line.rstrip()
+            if line:
+                log.append(line)
+                _jobs[job_id]["log"] = log[-50:]
+                _jobs[job_id]["message"] = line
+
+        process.wait()
+
+        if process.returncode != 0:
+            _set_job(job_id, "error",
+                     f"SpeciesNet exited with code {process.returncode}")
+            return
+
+        _set_job(job_id, "running", "Merging predictions into dataset…")
+        count = _merge_predictions(PREDICTIONS_FILE, tmp_path)
+        _set_job(job_id, "done", f"Done — {count} prediction(s) added/updated")
+
+    except Exception as exc:
+        _set_job(job_id, "error", str(exc))
+
+    finally:
+        if tmp_path and os.path.isfile(tmp_path):
+            os.unlink(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# API routes — predictions & images
+# ---------------------------------------------------------------------------
+
 @app.get("/api/predictions")
 def get_predictions():
     return {"predictions": load_predictions()}
@@ -84,13 +205,57 @@ def get_image(path: str = Query(...)):
 
 @app.get("/api/preview")
 def get_preview(path: str = Query(...)):
-    # Preview filenames encode the full path: C:/foo/bar.jpg → C~~foo~bar.jpg
     preview_dir = str(Path(path).parent / "previews")
     encoded = path.replace(":", "~").replace("/", "~").replace("\\", "~")
     preview_path = os.path.join(preview_dir, f"anno_{encoded}")
     if not os.path.isfile(preview_path):
         raise HTTPException(status_code=404, detail="Preview not found")
     return FileResponse(preview_path, media_type="image/jpeg")
+
+
+# ---------------------------------------------------------------------------
+# API routes — processing jobs
+# ---------------------------------------------------------------------------
+
+class ProcessRequest(BaseModel):
+    folder: str
+    country: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+
+@app.post("/api/process", status_code=202)
+def start_process(req: ProcessRequest):
+    if not os.path.isdir(req.folder):
+        raise HTTPException(status_code=400,
+                            detail=f"Folder not found: {req.folder}")
+
+    job_id = uuid.uuid4().hex[:8]
+    _jobs[job_id] = {"status": "running", "message": "Queued", "log": []}
+
+    thread = threading.Thread(
+        target=_run_job,
+        args=(job_id, req.folder, req.country, req.latitude, req.longitude),
+        daemon=True,
+    )
+    thread.start()
+    return {"job_id": job_id}
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str):
+    if job_id not in _jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _jobs[job_id]
+
+
+@app.get("/api/jobs")
+def list_jobs():
+    # Return all jobs, truncating the log to last 3 lines for brevity
+    return {
+        jid: {**info, "log": info.get("log", [])[-3:]}
+        for jid, info in _jobs.items()
+    }
 
 
 if __name__ == "__main__":
