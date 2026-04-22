@@ -161,6 +161,7 @@ def _run_job(job_id: str, folder: str, country: Optional[str],
         # is only touched once, atomically, after a successful run.
         fd, tmp_path = tempfile.mkstemp(suffix=".json")
         os.close(fd)
+        os.unlink(tmp_path)  # SpeciesNet must create this itself; an empty file causes a JSON parse error
 
         cmd = [
             PYTHON_EXECUTABLE, "-m", "speciesnet.scripts.run_model",
