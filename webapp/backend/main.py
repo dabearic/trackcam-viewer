@@ -164,7 +164,7 @@ def _run_job(job_id: str, folder: str, country: Optional[str],
         os.unlink(tmp_path)  # SpeciesNet must create this itself; an empty file causes a JSON parse error
 
         cmd = [
-            PYTHON_EXECUTABLE, "-m", "speciesnet.scripts.run_model",
+            PYTHON_EXECUTABLE, "-u", "-m", "speciesnet.scripts.run_model",
             "--folders", folder,
             "--predictions_json", tmp_path,
             "--bypass_prompts",
