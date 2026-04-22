@@ -216,6 +216,8 @@ def _run_job(job_id: str, folder: str, country: Optional[str],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding='utf-8',
+            errors='replace',
             bufsize=1,
         )
 
