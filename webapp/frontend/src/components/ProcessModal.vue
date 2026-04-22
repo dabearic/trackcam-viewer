@@ -43,15 +43,21 @@
             />
           </div>
         </div>
-        <div class="field field--row">
-          <div class="field">
-            <label class="field__label">Latitude <span class="field__hint">optional</span></label>
-            <input v-model.number="latitude" type="number" step="any" class="field__input" placeholder="51.5074" />
+        <div class="field">
+          <div class="field__label-row">
+            <label class="field__label">Location <span class="field__hint">optional</span></label>
+            <button
+              type="button"
+              class="btn btn--locate"
+              :disabled="locating"
+              @click="useCurrentLocation"
+            >{{ locating ? 'Locating…' : '⊕ Use my location' }}</button>
           </div>
-          <div class="field">
-            <label class="field__label">Longitude <span class="field__hint">optional</span></label>
-            <input v-model.number="longitude" type="number" step="any" class="field__input" placeholder="-0.1278" />
+          <div class="field--row">
+            <input v-model.number="latitude"  type="number" step="any" class="field__input" placeholder="Latitude" />
+            <input v-model.number="longitude" type="number" step="any" class="field__input" placeholder="Longitude" />
           </div>
+          <p v-if="locationError" class="field__error">{{ locationError }}</p>
         </div>
         <div v-if="submitError" class="modal__error">{{ submitError }}</div>
         <button type="submit" class="btn btn--primary">Run SpeciesNet</button>
@@ -90,9 +96,11 @@ import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 
 const emit = defineEmits(['close', 'done'])
 
-const folder      = ref('')
-const browsing    = ref(false)
+const folder       = ref('')
+const browsing     = ref(false)
 const admin1Region = ref('')
+const locating     = ref(false)
+const locationError = ref('')
 const country   = ref('')
 const latitude  = ref(null)
 const longitude = ref(null)
@@ -107,6 +115,27 @@ let pollTimer = null
 const canClose = computed(() =>
   !jobId.value || job.value.status === 'done' || job.value.status === 'error'
 )
+
+function useCurrentLocation() {
+  if (!navigator.geolocation) {
+    locationError.value = 'Geolocation is not supported by this browser.'
+    return
+  }
+  locating.value = true
+  locationError.value = ''
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      latitude.value  = parseFloat(pos.coords.latitude.toFixed(5))
+      longitude.value = parseFloat(pos.coords.longitude.toFixed(5))
+      locating.value  = false
+    },
+    err => {
+      locationError.value = `Could not get location: ${err.message}`
+      locating.value = false
+    },
+    { timeout: 10000 }
+  )
+}
 
 async function browse() {
   browsing.value = true
@@ -292,6 +321,18 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 
 .field__input--short { max-width: 100px; }
 
+.field__label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.field__error {
+  font-size: 12px;
+  color: #f87171;
+  margin-top: 2px;
+}
+
 .field__row {
   display: flex;
   gap: 6px;
@@ -304,6 +345,11 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 .btn--browse {
   flex-shrink: 0;
   padding: 7px 12px;
+}
+
+.btn--locate {
+  font-size: 12px;
+  padding: 3px 9px;
 }
 
 /* Buttons */
