@@ -82,9 +82,8 @@ resource "google_cloud_run_v2_job" "inference" {
 
         resources {
           limits = {
-            cpu              = "8"
-            memory           = "32Gi"
-            "nvidia.com/gpu" = "1"
+            cpu    = "8"
+            memory = "32Gi"
           }
         }
 
@@ -97,11 +96,6 @@ resource "google_cloud_run_v2_job" "inference" {
           value = var.project_id
         }
       }
-
-      # Request NVIDIA L4 GPU node
-      node_selector {
-        accelerator = "nvidia-l4"
-      }
     }
   }
 
@@ -109,4 +103,16 @@ resource "google_cloud_run_v2_job" "inference" {
     google_project_service.apis,
     google_artifact_registry_repository.main,
   ]
+}
+
+# node_selector (GPU config) is not yet in the Terraform provider schema.
+# Apply it via gcloud after the job is created/updated.
+resource "terraform_data" "inference_gpu" {
+  triggers_replace = [google_cloud_run_v2_job.inference.id]
+
+  provisioner "local-exec" {
+    command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --region=${var.region} --project=${var.project_id}"
+  }
+
+  depends_on = [google_cloud_run_v2_job.inference]
 }
