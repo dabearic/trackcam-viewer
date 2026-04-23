@@ -1,0 +1,7 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.0
+google-cloud-storage>=2.14
+google-cloud-firestore>=2.15
+google-cloud-run>=0.10
+firebase-admin>=6.4

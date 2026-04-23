@@ -1,0 +1,221 @@
+"""
+TrackCam SpeciesNet inference — Cloud Run Job entrypoint.
+
+Required env vars:
+  JOB_ID      — Firestore job document ID
+  USER_ID     — Firebase UID of the requesting user
+  GCS_BUCKET  — GCS bucket name
+  GCP_PROJECT — GCP project ID
+"""
+import hashlib
+import json
+import os
+import re
+import subprocess
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+from google.cloud import firestore, storage
+
+# ── ANSI / tqdm helpers (same as local backend) ───────────────────────────────
+_ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\r')
+_TQDM_RE = re.compile(r'^(.+?)\s*:\s*(\d+)%\|[^|]*\|\s*(\d+)/(\d+)')
+
+
+def _parse_label(label_str: str) -> dict:
+    parts = label_str.split(";")
+    common_name = parts[-1] if parts else label_str
+    scientific = ""
+    if len(parts) >= 6 and parts[4] and parts[5]:
+        scientific = f"{parts[4].capitalize()} {parts[5]}"
+    elif len(parts) >= 2 and parts[1]:
+        scientific = parts[1].capitalize()
+    return {"id": parts[0], "common_name": common_name, "scientific": scientific, "raw": label_str}
+
+
+def main():
+    job_id   = os.environ["JOB_ID"]
+    uid      = os.environ["USER_ID"]
+    bucket_name = os.environ["GCS_BUCKET"]
+    project  = os.environ["GCP_PROJECT"]
+
+    db  = firestore.Client(project=project)
+    gcs = storage.Client(project=project)
+    bucket = gcs.bucket(bucket_name)
+
+    job_ref  = db.collection("users").document(uid).collection("jobs").document(job_id)
+    pred_col = db.collection("users").document(uid).collection("predictions")
+
+    def set_status(status: str, message: str, extra: dict | None = None):
+        update = {"status": status, "message": message, "updated_at": _now()}
+        if extra:
+            update.update(extra)
+        job_ref.update(update)
+        print(f"[{status}] {message}")
+
+    # ── Read job document ─────────────────────────────────────────────────────
+    job_doc = job_ref.get().to_dict()
+    files   = job_doc["files"]           # list of GCS object paths
+    params  = job_doc.get("params", {})
+    country       = params.get("country")
+    admin1_region = params.get("admin1_region")
+    latitude      = params.get("latitude")
+    longitude     = params.get("longitude")
+
+    set_status("running", f"Downloading {len(files)} image(s) from storage…")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # ── Download images from GCS ──────────────────────────────────────────
+        local_paths = []
+        path_map: dict[str, str] = {}  # local_path -> gcs_path
+
+        for i, gcs_path in enumerate(files):
+            filename   = Path(gcs_path).name
+            local_path = os.path.join(tmpdir, filename)
+            bucket.blob(gcs_path).download_to_filename(local_path)
+            local_paths.append(local_path)
+            path_map[local_path] = gcs_path
+            if (i + 1) % 20 == 0 or (i + 1) == len(files):
+                set_status("running", f"Downloaded {i+1}/{len(files)} images…")
+
+        # ── Build instances JSON ──────────────────────────────────────────────
+        instances = []
+        for local_path in local_paths:
+            inst: dict = {"filepath": local_path}
+            if country:
+                inst["country"] = country
+            if admin1_region:
+                inst["admin1_region"] = admin1_region
+            if latitude is not None:
+                inst["latitude"] = latitude
+            if longitude is not None:
+                inst["longitude"] = longitude
+            instances.append(inst)
+
+        instances_file  = os.path.join(tmpdir, "instances.json")
+        predictions_file = os.path.join(tmpdir, "predictions.json")
+
+        with open(instances_file, "w") as f:
+            json.dump({"instances": instances}, f)
+
+        set_status("running", "Running SpeciesNet inference…")
+
+        # ── Run SpeciesNet ────────────────────────────────────────────────────
+        cmd = [
+            "python", "-u", "-m", "speciesnet.scripts.run_model",
+            "--instances_json", instances_file,
+            "--predictions_json", predictions_file,
+            "--bypass_prompts",
+        ]
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+
+        log: list[str] = []
+        progress: dict = {}
+
+        for line in process.stdout:
+            line = _ANSI_ESCAPE.sub("", line).rstrip()
+            if not line:
+                continue
+            m = _TQDM_RE.match(line)
+            if m:
+                label = m.group(1).strip()
+                progress[label] = {
+                    "percent": int(m.group(2)),
+                    "current": int(m.group(3)),
+                    "total":   int(m.group(4)),
+                }
+                job_ref.update({"progress": progress, "updated_at": _now()})
+            else:
+                log.append(line)
+                job_ref.update({"message": line, "log": log[-50:], "updated_at": _now()})
+
+        process.wait()
+
+        if process.returncode != 0:
+            set_status("error", f"SpeciesNet exited with code {process.returncode}")
+            raise SystemExit(1)
+
+        # ── Write predictions to Firestore ────────────────────────────────────
+        set_status("running", "Saving predictions to database…")
+
+        with open(predictions_file, encoding="utf-8") as f:
+            output = json.load(f)
+
+        batch = db.batch()
+        batch_count = 0
+        count = 0
+        now = _now()
+        folder = job_doc.get("folder", "")
+
+        for pred in output.get("predictions", []):
+            local_fp = pred["filepath"]
+            gcs_path = path_map.get(local_fp, local_fp)
+            filename = Path(gcs_path).name
+
+            doc_id = hashlib.md5(gcs_path.encode()).hexdigest()
+
+            prediction_label = None
+            if "prediction" in pred:
+                prediction_label = _parse_label(pred["prediction"])
+
+            top5 = []
+            if "classifications" in pred:
+                for cls, score in zip(
+                    pred["classifications"]["classes"],
+                    pred["classifications"]["scores"],
+                ):
+                    top5.append({**_parse_label(cls), "score": round(score, 4)})
+
+            doc = {
+                "gcs_path":          gcs_path,
+                "filename":          filename,
+                "folder":            folder,
+                "uid":               uid,
+                "prediction":        prediction_label,
+                "prediction_score":  pred.get("prediction_score"),
+                "prediction_source": pred.get("prediction_source"),
+                "top5":              top5,
+                "detections":        pred.get("detections", []),
+                "model_version":     pred.get("model_version"),
+                "failures":          pred.get("failures", []),
+                "country":           pred.get("country"),
+                "latitude":          pred.get("latitude"),
+                "longitude":         pred.get("longitude"),
+                "job_id":            job_id,
+                "created_at":        now,
+                "updated_at":        now,
+            }
+
+            batch.set(pred_col.document(doc_id), doc, merge=True)
+            batch_count += 1
+            count += 1
+
+            if batch_count >= 400:   # Firestore batch limit is 500
+                batch.commit()
+                batch = db.batch()
+                batch_count = 0
+
+        if batch_count > 0:
+            batch.commit()
+
+        set_status("done", f"Done — {count} prediction(s) saved",
+                   {"completed_at": now})
+        print(f"[done] Saved {count} predictions for user {uid}")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+if __name__ == "__main__":
+    main()

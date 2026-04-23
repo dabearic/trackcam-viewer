@@ -1,0 +1,5 @@
+project_id          = "trackcam-viewer"
+region              = "us-east4"
+admin_email         = "dabearic@gmail.com"
+oauth_client_id     = "PASTE_YOUR_OAUTH_CLIENT_ID_HERE"
+oauth_client_secret = "PASTE_YOUR_OAUTH_CLIENT_SECRET_HERE"
