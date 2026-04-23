@@ -30,11 +30,13 @@ variable "oauth_client_secret" {
 variable "api_image" {
   description = "Docker image for the web API service"
   type        = string
-  default     = "us-east4-docker.pkg.dev/trackcam-viewer/trackcam/api:latest"
+  # Placeholder allows `terraform apply` to succeed before real images are built.
+  # After pushing your images, re-run `terraform apply` to update Cloud Run.
+  default     = "us-docker.pkg.dev/cloudrun/container/hello"
 }
 
 variable "inference_image" {
   description = "Docker image for the inference Cloud Run Job"
   type        = string
-  default     = "us-east4-docker.pkg.dev/trackcam-viewer/trackcam/inference:latest"
+  default     = "us-docker.pkg.dev/cloudrun/container/hello"
 }
