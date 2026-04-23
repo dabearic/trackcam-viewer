@@ -72,6 +72,11 @@ resource "google_cloud_run_v2_job" "inference" {
   location = var.region
 
   template {
+    # GPU jobs cannot use zonal redundancy — must be explicitly disabled
+    annotations = {
+      "run.googleapis.com/zonal-redundancy" = "false"
+    }
+
     template {
       service_account = google_service_account.inference.email
       max_retries     = 0
@@ -111,7 +116,7 @@ resource "terraform_data" "inference_gpu" {
   triggers_replace = [google_cloud_run_v2_job.inference.id]
 
   provisioner "local-exec" {
-    command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --region=${var.region} --project=${var.project_id}"
+    command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --execution-environment=gen2 --update-annotations=run.googleapis.com/zonal-redundancy=false --region=${var.region} --project=${var.project_id}"
   }
 
   depends_on = [google_cloud_run_v2_job.inference]
