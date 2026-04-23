@@ -130,7 +130,7 @@ async def get_image(
         uid = fb_auth.verify_id_token(raw_token)["uid"]
     except Exception as exc:
         raise HTTPException(status_code=401, detail=f"Invalid token: {exc}")
-    if not path.startswith(f"images/{uid}/"):
+    if not (path.startswith(f"images/{uid}/") or path.startswith(f"crops/{uid}/")):
         raise HTTPException(status_code=403, detail="Access denied")
     url = _bucket.blob(path).generate_signed_url(
         expiration=timedelta(minutes=15),

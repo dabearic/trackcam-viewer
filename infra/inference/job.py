@@ -17,10 +17,35 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from google.cloud import firestore, storage
+from PIL import Image
+
+CROP_CONF_THRESHOLD = 0.2
+CROP_MAX_DIM        = 512
+CROP_JPEG_QUALITY   = 85
 
 # ── ANSI / tqdm helpers (same as local backend) ───────────────────────────────
 _ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\r')
 _TQDM_RE = re.compile(r'^(.+?)\s*:\s*(\d+)%\|[^|]*\|\s*(\d+)/(\d+)')
+
+
+def _save_crop(image: Image.Image, bbox: list, dest_path: str) -> None:
+    """Crop `bbox` (normalised [x, y, w, h]) from `image` and save JPEG to `dest_path`."""
+    w, h = image.size
+    bx, by, bw, bh = bbox
+    x0 = max(0, int(bx * w))
+    y0 = max(0, int(by * h))
+    x1 = min(w, int((bx + bw) * w))
+    y1 = min(h, int((by + bh) * h))
+    if x1 <= x0 or y1 <= y0:
+        return
+    crop = image.crop((x0, y0, x1, y1))
+    cw, ch = crop.size
+    scale = min(1.0, CROP_MAX_DIM / max(cw, ch))
+    if scale < 1.0:
+        crop = crop.resize((int(cw * scale), int(ch * scale)), Image.LANCZOS)
+    if crop.mode != "RGB":
+        crop = crop.convert("RGB")
+    crop.save(dest_path, "JPEG", quality=CROP_JPEG_QUALITY, optimize=True)
 
 
 def _parse_label(label_str: str) -> dict:
@@ -176,6 +201,31 @@ def main():
                 ):
                     top5.append({**_parse_label(cls), "score": round(score, 4)})
 
+            detections = pred.get("detections", [])
+            source_image = None
+            for idx, det in enumerate(detections):
+                if det.get("conf", 0) < CROP_CONF_THRESHOLD or not det.get("bbox"):
+                    continue
+                if source_image is None:
+                    try:
+                        source_image = Image.open(local_fp)
+                    except Exception as exc:
+                        log.append(f"crop: could not open {local_fp}: {exc}")
+                        break
+                crop_local = os.path.join(tmpdir, f"{doc_id}_{idx}.jpg")
+                try:
+                    _save_crop(source_image, det["bbox"], crop_local)
+                except Exception as exc:
+                    log.append(f"crop: failed for {filename} det {idx}: {exc}")
+                    continue
+                crop_gcs_path = f"crops/{uid}/{folder}/{doc_id}_{idx}.jpg"
+                bucket.blob(crop_gcs_path).upload_from_filename(
+                    crop_local, content_type="image/jpeg"
+                )
+                det["crop_gcs_path"] = crop_gcs_path
+            if source_image is not None:
+                source_image.close()
+
             doc = {
                 "gcs_path":          gcs_path,
                 "filename":          filename,
@@ -185,7 +235,7 @@ def main():
                 "prediction_score":  pred.get("prediction_score"),
                 "prediction_source": pred.get("prediction_source"),
                 "top5":              top5,
-                "detections":        pred.get("detections", []),
+                "detections":        detections,
                 "model_version":     pred.get("model_version"),
                 "failures":          pred.get("failures", []),
                 "country":           pred.get("country"),
