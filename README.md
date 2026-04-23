@@ -71,8 +71,8 @@ npm install
 npm run dev                         # localhost:5173
 ```
 
-The frontend's `AUTH_ENABLED` flag in `firebase.js` auto-disables when no
-real Firebase config is present, so local dev skips sign-in entirely.
+The frontend's `AUTH_ENABLED` flag in `firebase.js` is tied to Vite's
+build mode: `npm run dev` skips sign-in, production builds require it.
 
 ## Cloud deployment
 
