@@ -1,6 +1,12 @@
 <template>
   <div class="crop">
-    <canvas ref="canvasRef" class="crop__canvas" />
+    <img
+      v-if="det.crop_gcs_path"
+      :src="imageUrl(det.crop_gcs_path)"
+      class="crop__img"
+      :alt="det.label"
+    />
+    <canvas v-else ref="canvasRef" class="crop__canvas" />
     <span class="crop__badge" :style="{ background: color }">
       {{ det.label }} {{ (det.conf * 100).toFixed(0) }}%
     </span>
@@ -9,6 +15,7 @@
 
 <script setup>
 import { ref, onMounted, watch } from 'vue'
+import { imageUrl } from '../firebase.js'
 
 const props = defineProps({
   imageSrc: String,
@@ -20,6 +27,7 @@ const canvasRef = ref(null)
 const TARGET_H = 110
 
 function draw() {
+  if (props.det.crop_gcs_path) return   // using <img>, nothing to paint
   const canvas = canvasRef.value
   if (!canvas) return
 
@@ -54,7 +62,8 @@ watch(() => [props.imageSrc, props.det], draw)
   border: 1px solid var(--border);
 }
 
-.crop__canvas {
+.crop__canvas,
+.crop__img {
   display: block;
   height: 110px;
   width: auto;
