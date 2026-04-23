@@ -212,13 +212,15 @@ def main():
                     except Exception as exc:
                         log.append(f"crop: could not open {local_fp}: {exc}")
                         break
-                crop_local = os.path.join(tmpdir, f"{doc_id}_{idx}.jpg")
+                stem = Path(filename).stem
+                crop_filename = f"{stem}_detection_{idx + 1}.jpg"
+                crop_local = os.path.join(tmpdir, crop_filename)
                 try:
                     _save_crop(source_image, det["bbox"], crop_local)
                 except Exception as exc:
                     log.append(f"crop: failed for {filename} det {idx}: {exc}")
                     continue
-                crop_gcs_path = f"crops/{uid}/{folder}/{doc_id}_{idx}.jpg"
+                crop_gcs_path = f"crops/{uid}/{folder}/{crop_filename}"
                 bucket.blob(crop_gcs_path).upload_from_filename(
                     crop_local, content_type="image/jpeg"
                 )
