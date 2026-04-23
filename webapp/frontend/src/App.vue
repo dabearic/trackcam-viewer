@@ -157,7 +157,7 @@ async function loadPredictions() {
 }
 
 function _updateDateBounds(preds) {
-  const dates = preds.map(p => filenameToDate(p.filename)).filter(Boolean).sort()
+  const dates = preds.map(p => predDate(p)).filter(Boolean).sort()
   if (dates.length) {
     dataDateFrom.value = dates[0]
     dataDateTo.value   = dates[dates.length - 1]
@@ -179,6 +179,12 @@ function getCategory(pred) {
   return 'animal'
 }
 
+function timestampOf(pred) {
+  // Prefer EXIF-derived captured_at; fall back to the first 14 chars of the filename.
+  if (pred.captured_at) return pred.captured_at
+  return pred.filename ? pred.filename.substring(0, 14) : ''
+}
+
 const filteredPredictions = computed(() => {
   const from = filters.dateFrom
   const to   = filters.dateTo
@@ -188,7 +194,8 @@ const filteredPredictions = computed(() => {
     if (filters.species && p.prediction?.common_name !== filters.species) return false
     if (filters.minConfidence > 0 && (p.prediction_score ?? 0) < filters.minConfidence / 100) return false
     if (from || to) {
-      const ts   = p.filename.substring(0, 8)
+      const ts = timestampOf(p).substring(0, 8)
+      if (ts.length < 8) return false
       const date = `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)}`
       if (from && date < from) return false
       if (to   && date > to)   return false
@@ -200,7 +207,7 @@ const filteredPredictions = computed(() => {
 const groupedEvents = computed(() => {
   const groups = new Map()
   for (const pred of filteredPredictions.value) {
-    const ts = pred.filename.substring(0, 14)
+    const ts = timestampOf(pred)
     if (!groups.has(ts)) groups.set(ts, [])
     groups.get(ts).push(pred)
   }
@@ -226,9 +233,9 @@ function parseTimestamp(ts) {
   return new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`)
 }
 
-function filenameToDate(filename) {
-  if (!filename || filename.length < 8) return ''
-  const ts = filename.substring(0, 8)
+function predDate(pred) {
+  const ts = timestampOf(pred).substring(0, 8)
+  if (ts.length < 8) return ''
   return `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)}`
 }
 

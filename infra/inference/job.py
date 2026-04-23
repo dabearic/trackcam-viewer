@@ -28,6 +28,26 @@ _ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\r')
 _TQDM_RE = re.compile(r'^(.+?)\s*:\s*(\d+)%\|[^|]*\|\s*(\d+)/(\d+)')
 
 
+def _read_exif_datetime(image: Image.Image) -> str | None:
+    """Return EXIF DateTimeOriginal as YYYYMMDDHHMMSS, or None if absent."""
+    try:
+        exif = image.getexif()
+        if not exif:
+            return None
+        # 36867 = DateTimeOriginal, 306 = DateTime (fallback)
+        raw = exif.get(36867) or exif.get_ifd(0x8769).get(36867) or exif.get(306)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    # Standard EXIF format: "YYYY:MM:DD HH:MM:SS"
+    try:
+        date_part, time_part = raw.strip().split(" ")
+        return date_part.replace(":", "") + time_part.replace(":", "")
+    except Exception:
+        return None
+
+
 def _save_crop(image: Image.Image, bbox: list, dest_path: str) -> None:
     """Crop `bbox` (normalised [x, y, w, h]) from `image` and save JPEG to `dest_path`."""
     w, h = image.size
@@ -201,17 +221,21 @@ def main():
                 ):
                     top5.append({**_parse_label(cls), "score": round(score, 4)})
 
-            detections = pred.get("detections", [])
+            # Open the source image once — used for both EXIF and cropping.
             source_image = None
+            captured_at = None
+            try:
+                source_image = Image.open(local_fp)
+                captured_at = _read_exif_datetime(source_image)
+            except Exception as exc:
+                log.append(f"image: could not open {local_fp}: {exc}")
+
+            detections = pred.get("detections", [])
             for idx, det in enumerate(detections):
                 if det.get("conf", 0) < CROP_CONF_THRESHOLD or not det.get("bbox"):
                     continue
                 if source_image is None:
-                    try:
-                        source_image = Image.open(local_fp)
-                    except Exception as exc:
-                        log.append(f"crop: could not open {local_fp}: {exc}")
-                        break
+                    break
                 stem = Path(filename).stem
                 crop_filename = f"{stem}_detection_{idx + 1}.jpg"
                 crop_local = os.path.join(tmpdir, crop_filename)
@@ -238,6 +262,7 @@ def main():
                 "prediction_source": pred.get("prediction_source"),
                 "top5":              top5,
                 "detections":        detections,
+                "captured_at":       captured_at,
                 "model_version":     pred.get("model_version"),
                 "failures":          pred.get("failures", []),
                 "country":           pred.get("country"),
