@@ -3,7 +3,8 @@ FROM node:20-alpine AS frontend-build
 
 WORKDIR /build
 COPY webapp/frontend/package*.json ./
-RUN npm ci
+# Use npm install (not npm ci) so this works without a committed lockfile.
+RUN npm install --no-audit --no-fund
 COPY webapp/frontend/ ./
 RUN npm run build          # outputs to /build/dist
 
