@@ -2,16 +2,14 @@ import { initializeApp } from 'firebase/app'
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onIdTokenChanged } from 'firebase/auth'
 import { ref } from 'vue'
 
-// Fill these in after running `terraform apply` (see SETUP.md step 8).
-// Leave as-is for local development — auth will be skipped automatically.
 const firebaseConfig = {
   apiKey:    "AIzaSyA5CGlWuvCriQPUWk0l4CrER55tFvSz2Vc",
   authDomain: "trackcam-viewer.firebaseapp.com",
   projectId: "trackcam-viewer",
 }
 
-/** True only when real Firebase credentials have been configured. */
-export const AUTH_ENABLED = firebaseConfig.apiKey !== "REPLACE_WITH_YOUR_API_KEY"
+// Auth is skipped in local dev (`npm run dev`) and enabled in production builds.
+export const AUTH_ENABLED = import.meta.env.PROD
 
 const firebaseApp = initializeApp(firebaseConfig)
 const auth        = getAuth(firebaseApp)
