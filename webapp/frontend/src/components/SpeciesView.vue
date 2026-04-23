@@ -160,6 +160,8 @@ import { imageUrl } from '../firebase.js'
 const props = defineProps({ predictions: Array })
 const emit = defineEmits(['select', 'filter'])
 
+const EXCLUDED_LABELS = new Set(['blank', 'no cv result'])
+
 const selectedPath = ref(null)
 
 // ── Build the taxonomy tree from prediction.raw (semicolon-separated) ─────────
@@ -183,6 +185,7 @@ const tree = computed(() => {
     if (!pred.prediction) continue
     const chain = taxonomyChain(pred)
     if (!chain) continue
+    if (EXCLUDED_LABELS.has(chain.commonName.toLowerCase())) continue
     const segments = [...chain.levels, chain.commonName]
 
     let cur = root
@@ -215,7 +218,7 @@ const tree = computed(() => {
 })
 
 function sortRecursive(node) {
-  node.children.sort((a, b) => a.label.localeCompare(b.label))
+  node.children.sort((a, b) => b.count - a.count)
   for (const child of node.children) sortRecursive(child)
 }
 
@@ -247,6 +250,7 @@ const speciesCards = computed(() => {
   const groups = new Map()
   for (const pred of node.preds) {
     const name = pred.prediction?.common_name || 'unknown'
+    if (EXCLUDED_LABELS.has(name.toLowerCase())) continue
     if (!groups.has(name)) groups.set(name, [])
     groups.get(name).push(pred)
   }
