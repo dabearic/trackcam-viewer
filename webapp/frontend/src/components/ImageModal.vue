@@ -140,6 +140,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import DetectionCrop from './DetectionCrop.vue'
+import { imageUrl } from '../firebase.js'
 
 const props = defineProps({
   image: Object,
@@ -159,7 +160,7 @@ const imageSrc = computed(() => {
   if (showPreview.value) {
     return `/api/preview?path=${encodeURIComponent(props.image.filepath)}`
   }
-  return `/api/image?path=${encodeURIComponent(props.image.filepath)}`
+  return imageUrl(props.image.filepath)
 })
 
 const significantDetections = computed(() =>
@@ -255,7 +256,7 @@ watch(() => props.image, () => {
   border-radius: var(--radius);
   display: flex;
   flex-direction: column;
-  width: min(1200px, 100%);
+  width: 100%;
   max-height: calc(100vh - 32px);
   overflow: hidden;
 }

@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Optional
 
 import firebase_admin
+import google.auth
+import google.auth.transport.requests
 from firebase_admin import auth as fb_auth
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import RedirectResponse
@@ -44,6 +46,34 @@ INFERENCE_JOB_NAME = os.environ["INFERENCE_JOB_NAME"]
 _db      = firestore.Client(project=GCP_PROJECT)
 _storage = storage.Client(project=GCP_PROJECT)
 _bucket  = _storage.bucket(GCS_BUCKET)
+
+# Cloud Run provides compute-engine credentials with no private key, so
+# generate_signed_url can't sign locally. Pass service_account_email +
+# access_token so the library uses the IAM signBlob API instead.
+_auth_creds, _ = google.auth.default()
+
+
+def _resolve_sa_email() -> str:
+    # Compute-engine credentials report "default" as an alias — ask the
+    # metadata server for the real email address.
+    import urllib.request
+    email = getattr(_auth_creds, "service_account_email", None)
+    if email and email != "default":
+        return email
+    req = urllib.request.Request(
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email",
+        headers={"Metadata-Flavor": "Google"},
+    )
+    with urllib.request.urlopen(req, timeout=2) as r:
+        return r.read().decode().strip()
+
+
+_sa_email = _resolve_sa_email()
+
+
+def _sign_kwargs() -> dict:
+    _auth_creds.refresh(google.auth.transport.requests.Request())
+    return {"service_account_email": _sa_email, "access_token": _auth_creds.token}
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
 
@@ -85,14 +115,28 @@ async def get_predictions(uid: str = Depends(verify_token)):
 @app.get("/api/image")
 async def get_image(
     path: str = Query(..., description="GCS object path, e.g. images/uid/folder/file.jpg"),
-    uid: str = Depends(verify_token),
+    token: Optional[str] = Query(None, description="Firebase ID token (for <img src> requests)"),
+    authorization: str = Header(None),
 ):
+    # Accept token via Authorization header OR ?token= query param (for <img>)
+    raw_token = None
+    if authorization and authorization.startswith("Bearer "):
+        raw_token = authorization.split(" ", 1)[1]
+    elif token:
+        raw_token = token
+    if not raw_token:
+        raise HTTPException(status_code=401, detail="Missing token")
+    try:
+        uid = fb_auth.verify_id_token(raw_token)["uid"]
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {exc}")
     if not path.startswith(f"images/{uid}/"):
         raise HTTPException(status_code=403, detail="Access denied")
     url = _bucket.blob(path).generate_signed_url(
         expiration=timedelta(minutes=15),
         method="GET",
         version="v4",
+        **_sign_kwargs(),
     )
     return RedirectResponse(url, status_code=307)
 
@@ -126,6 +170,7 @@ async def prepare_upload(
             method="PUT",
             content_type="image/jpeg",
             version="v4",
+            **_sign_kwargs(),
         )
         uploads.append({"filename": filename, "gcs_path": gcs_path, "url": url})
 

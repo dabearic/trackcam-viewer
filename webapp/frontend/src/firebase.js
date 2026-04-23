@@ -1,10 +1,11 @@
 import { initializeApp } from 'firebase/app'
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onIdTokenChanged } from 'firebase/auth'
+import { ref } from 'vue'
 
 // Fill these in after running `terraform apply` (see SETUP.md step 8).
 // Leave as-is for local development — auth will be skipped automatically.
 const firebaseConfig = {
-  apiKey:    "REPLACE_WITH_YOUR_API_KEY",
+  apiKey:    "AIzaSyA5CGlWuvCriQPUWk0l4CrER55tFvSz2Vc",
   authDomain: "trackcam-viewer.firebaseapp.com",
   projectId: "trackcam-viewer",
 }
@@ -43,6 +44,23 @@ export async function apiFetch(url, options = {}) {
       Authorization: `Bearer ${token}`,
     },
   })
+}
+
+// Reactive cached token, updated whenever Firebase refreshes it.
+// Used to build <img src> URLs since browsers don't attach Authorization headers.
+export const idToken = ref(null)
+
+if (AUTH_ENABLED) {
+  onIdTokenChanged(auth, async (user) => {
+    idToken.value = user ? await user.getIdToken() : null
+  })
+}
+
+/** Build an /api/image URL that includes the current ID token as a query param. */
+export function imageUrl(path) {
+  const base = `/api/image?path=${encodeURIComponent(path)}`
+  if (!AUTH_ENABLED || !idToken.value) return base
+  return `${base}&token=${encodeURIComponent(idToken.value)}`
 }
 
 export { onIdTokenChanged }

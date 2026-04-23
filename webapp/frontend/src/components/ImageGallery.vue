@@ -16,7 +16,7 @@
         @click="$emit('select', img)"
       >
         <img
-          :src="`/api/image?path=${encodeURIComponent(img.filepath)}`"
+          :src="imageUrl(img.filepath)"
           :alt="img.filename"
           loading="lazy"
         />
@@ -33,6 +33,7 @@
 </template>
 
 <script setup>
+import { imageUrl } from '../firebase.js'
 const props = defineProps({ events: Array })
 defineEmits(['select', 'day-select'])
 
