@@ -30,6 +30,18 @@
         <span>{{ stats.images }} images</span>
         <span>{{ stats.species }} species</span>
       </div>
+      <div class="app-header__views">
+        <button
+          class="app-header__view-btn"
+          :class="{ 'app-header__view-btn--active': view === 'gallery' }"
+          @click="view = 'gallery'"
+        >Gallery</button>
+        <button
+          class="app-header__view-btn"
+          :class="{ 'app-header__view-btn--active': view === 'species' }"
+          @click="view = 'species'"
+        >Species</button>
+      </div>
       <div class="app-header__right">
         <button class="app-header__process-btn" @click="showProcess = true">+ Add Photos</button>
         <button v-if="currentUser" class="app-header__user-btn" :title="`Sign out ${currentUser.email}`" @click="handleSignOut">
@@ -41,6 +53,7 @@
 
     <div class="app-body">
       <FilterBar
+        v-if="view === 'gallery'"
         :species="allSpecies"
         :filters="filters"
         :total="predictions.length"
@@ -53,12 +66,19 @@
       <main class="app-main">
         <div v-if="loading" class="state-msg">Loading predictions…</div>
         <div v-else-if="error" class="state-msg state-msg--error">{{ error }}</div>
-        <div v-else-if="groupedEvents.length === 0" class="state-msg">No images match the current filters.</div>
-        <ImageGallery
+        <template v-else-if="view === 'gallery'">
+          <div v-if="groupedEvents.length === 0" class="state-msg">No images match the current filters.</div>
+          <ImageGallery
+            v-else
+            :events="groupedEvents"
+            @select="openModal"
+            @day-select="selectedDay = $event"
+          />
+        </template>
+        <SpeciesView
           v-else
-          :events="groupedEvents"
+          :predictions="predictions"
           @select="openModal"
-          @day-select="selectedDay = $event"
         />
       </main>
     </div>
@@ -95,6 +115,7 @@ import ImageGallery from './components/ImageGallery.vue'
 import ImageModal from './components/ImageModal.vue'
 import DaySummary from './components/DaySummary.vue'
 import ProcessModal from './components/ProcessModal.vue'
+import SpeciesView from './components/SpeciesView.vue'
 import { auth, AUTH_ENABLED, apiFetch, signInWithGoogle, signOutUser, onIdTokenChanged } from './firebase.js'
 
 const predictions  = ref([])
@@ -103,6 +124,7 @@ const error        = ref(null)
 const selectedImage = ref(null)
 const selectedDay  = ref(null)
 const showProcess  = ref(false)
+const view         = ref('gallery')  // 'gallery' | 'species'
 const dataDateFrom = ref('')
 const dataDateTo   = ref('')
 
@@ -369,6 +391,35 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.app-header__views {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-alt, #111);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px;
+}
+
+.app-header__view-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.app-header__view-btn:hover { color: var(--text); }
+
+.app-header__view-btn--active {
+  background: var(--accent, #2d7d46);
+  color: white;
 }
 
 .app-header__process-btn {
