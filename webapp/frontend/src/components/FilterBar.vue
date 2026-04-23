@@ -56,6 +56,14 @@
       </div>
     </div>
 
+    <div v-if="filters.hour !== null" class="filterbar__section">
+      <label class="filterbar__label">Hour filter</label>
+      <div class="filterbar__chip">
+        {{ filters.hour }}:00–{{ filters.hour }}:59
+        <button class="filterbar__chip-clear" @click="emit('update', { hour: null })">✕</button>
+      </div>
+    </div>
+
     <div class="filterbar__footer">
       <span class="filterbar__count">{{ filtered }} / {{ total }}</span>
       <button class="filterbar__clear" @click="clearFilters">Clear</button>
@@ -101,6 +109,7 @@ function clearFilters() {
     categories: CATEGORIES.map(c => c.key),
     dateFrom: props.dateFromMin ?? '',
     dateTo: props.dateToMax ?? '',
+    hour: null,
   })
 }
 </script>
@@ -182,6 +191,28 @@ function clearFilters() {
   height: 14px;
   cursor: pointer;
 }
+
+.filterbar__chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface2);
+  border: 1px solid var(--accent, #2d7d46);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text);
+}
+.filterbar__chip-clear {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 0 0 6px;
+  font-size: 12px;
+  line-height: 1;
+}
+.filterbar__chip-clear:hover { color: var(--text); }
 
 .filterbar__footer {
   margin-top: auto;

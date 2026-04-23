@@ -9,9 +9,8 @@
       <span
         v-if="node.children.length"
         class="tree-node__caret"
-        :class="{ 'tree-node__caret--open': expanded }"
         @click.stop="expanded = !expanded"
-      >▸</span>
+      >{{ expanded ? '−' : '+' }}</span>
       <span v-else class="tree-node__caret tree-node__caret--leaf">·</span>
       <span class="tree-node__label">{{ node.label }}</span>
       <span class="tree-node__count">{{ node.count }}</span>
@@ -23,6 +22,7 @@
         :node="child"
         :depth="depth + 1"
         :selected-path="selectedPath"
+        :force-expand="node.children.length === 1"
         @select="$emit('select', $event)"
       />
     </div>
@@ -30,17 +30,20 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 
 const props = defineProps({
   node: Object,
   depth: { type: Number, default: 0 },
   selectedPath: String,
+  forceExpand: { type: Boolean, default: false },
 })
 defineEmits(['select'])
 
-// Top-level nodes start expanded; deeper ones collapsed.
-const expanded = ref(props.depth < 1)
+const expanded = ref(props.depth < 1 || props.forceExpand)
+
+// When the parent expands and has only one child, auto-expand this node too.
+watch(() => props.forceExpand, val => { if (val) expanded.value = true })
 </script>
 
 <style scoped>
@@ -54,7 +57,7 @@ const expanded = ref(props.depth < 1)
   border: none;
   text-align: left;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 15px;
   color: var(--text, #222);
   border-radius: 4px;
 }
@@ -66,19 +69,20 @@ const expanded = ref(props.depth < 1)
 .tree-node__row--selected .tree-node__count { color: rgba(255, 255, 255, 0.8); }
 
 .tree-node__caret {
-  width: 12px;
-  font-size: 10px;
+  width: 16px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  text-align: center;
   color: #666;
-  transition: transform 0.15s;
   user-select: none;
   flex-shrink: 0;
 }
-.tree-node__caret--open { transform: rotate(90deg); }
-.tree-node__caret--leaf { color: #ccc; }
+.tree-node__caret--leaf { color: #ccc; font-weight: 400; }
 
 .tree-node__label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tree-node__count {
-  font-size: 11px;
+  font-size: 13px;
   color: #888;
   margin-left: 4px;
   flex-shrink: 0;

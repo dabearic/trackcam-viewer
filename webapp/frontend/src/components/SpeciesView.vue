@@ -20,18 +20,90 @@
             <span v-if="card.scientific" class="species-card__scientific">{{ card.scientific }}</span>
             <span class="species-card__count">{{ card.count }} detection{{ card.count === 1 ? '' : 's' }}</span>
           </header>
+          <div class="species-card__body">
+            <div class="species-card__histogram">
+              <div class="histogram__block">
+                <div class="histogram__title">Time of Day</div>
+                <div class="histogram__chart">
+                  <div class="histogram__y-axis">
+                    <span>{{ Math.max(...card.hours) }}</span>
+                    <span>0</span>
+                  </div>
+                  <div class="histogram__bars-wrap">
+                    <svg class="histogram__svg" viewBox="0 0 240 48" preserveAspectRatio="none">
+                      <line x1="0" y1="0" x2="0" y2="48" class="histogram__axis" />
+                      <rect
+                        v-for="(n, h) in card.hours"
+                        :key="h"
+                        :x="h * 10 + 1"
+                        :width="8"
+                        :height="card.hours[h] === 0 ? 1 : Math.max(2, (n / Math.max(...card.hours)) * 44)"
+                        :y="48 - (card.hours[h] === 0 ? 1 : Math.max(2, (n / Math.max(...card.hours)) * 44))"
+                        :class="['histogram__bar', { 'histogram__bar--zero': n === 0, 'histogram__bar--hover': barHover?.id === `${card.key}-h${h}` }]"
+                        @click="emit('filter', { species: card.rawName, hour: h })"
+                        @mouseenter="barHover = { id: `${card.key}-h${h}`, label: `${h}:00–${h}:59`, count: n, x: $event.clientX, y: $event.clientY }"
+                        @mousemove="barHover = { ...barHover, x: $event.clientX, y: $event.clientY }"
+                        @mouseleave="barHover = null"
+                      />
+                    </svg>
+                    <div class="histogram__labels">
+                      <span>12a</span><span>6a</span><span>12p</span><span>6p</span><span>12a</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="histogram__block">
+                <div class="histogram__title">Month of Year</div>
+                <div class="histogram__chart">
+                  <div class="histogram__y-axis">
+                    <span>{{ Math.max(...card.months) }}</span>
+                    <span>0</span>
+                  </div>
+                  <div class="histogram__bars-wrap">
+                    <svg class="histogram__svg" viewBox="0 0 120 48" preserveAspectRatio="none">
+                      <line x1="0" y1="0" x2="0" y2="48" class="histogram__axis" />
+                      <rect
+                        v-for="(n, m) in card.months"
+                        :key="m"
+                        :x="m * 10 + 1"
+                        :width="8"
+                        :height="card.months[m] === 0 ? 1 : Math.max(2, (n / Math.max(...card.months)) * 44)"
+                        :y="48 - (card.months[m] === 0 ? 1 : Math.max(2, (n / Math.max(...card.months)) * 44))"
+                        :class="['histogram__bar', { 'histogram__bar--zero': n === 0, 'histogram__bar--hover': barHover?.id === `${card.key}-m${m}` }]"
+                        @mouseenter="barHover = { id: `${card.key}-m${m}`, label: MONTH_NAMES[m], count: n, x: $event.clientX, y: $event.clientY }"
+                        @mousemove="barHover = { ...barHover, x: $event.clientX, y: $event.clientY }"
+                        @mouseleave="barHover = null"
+                      />
+                    </svg>
+                    <div class="histogram__labels">
+                      <span>Jan</span><span>Apr</span><span>Jul</span><span>Oct</span><span>Dec</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
           <div class="species-card__crops">
             <button
               v-for="top in card.top"
-              :key="top.pred.gcs_path"
+              :key="imagePathOf(top.pred)"
               class="species-card__crop"
               @click="$emit('select', top.pred)"
+              @mouseenter="showPreview(top, $event)"
+              @mousemove="movePreview($event)"
+              @mouseleave="hidePreview"
             >
               <img
                 v-if="top.cropPath"
                 :src="imageUrl(top.cropPath)"
                 :alt="card.commonName"
                 loading="lazy"
+              />
+              <div
+                v-else-if="top.bbox"
+                class="species-card__crop-bbox"
+                :style="bboxStyle(top)"
               />
               <div v-else class="species-card__crop-placeholder">no crop</div>
               <div class="species-card__crop-meta">
@@ -40,19 +112,53 @@
               </div>
             </button>
           </div>
+          </div>
         </article>
       </div>
     </section>
+
+    <Teleport to="body">
+      <img
+        v-if="preview.src"
+        class="species-view__preview"
+        :src="preview.src"
+        :style="{ left: preview.x + 'px', top: preview.y + 'px' }"
+      />
+      <div
+        v-if="barHover"
+        class="species-view__hist-tooltip"
+        :style="{ left: barHover.x + 12 + 'px', top: barHover.y + 12 + 'px' }"
+      >{{ barHover.label }} — {{ barHover.count }} detection{{ barHover.count === 1 ? '' : 's' }}</div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, reactive, computed } from 'vue'
+
+const preview  = reactive({ src: null, x: 0, y: 0 })
+const barHover = ref(null)
+
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+function showPreview(top, e) {
+  preview.src = top.cropPath ? imageUrl(top.cropPath) : null
+  if (preview.src) movePreview(e)
+}
+
+function movePreview(e) {
+  preview.x = e.clientX + 16
+  preview.y = e.clientY + 16
+}
+
+function hidePreview() {
+  preview.src = null
+}
 import TreeNode from './TreeNode.vue'
 import { imageUrl } from '../firebase.js'
 
 const props = defineProps({ predictions: Array })
-defineEmits(['select'])
+const emit = defineEmits(['select', 'filter'])
 
 const selectedPath = ref(null)
 
@@ -155,17 +261,37 @@ const speciesCards = computed(() => {
       const tb = timestampOf(b)
       return tb.localeCompare(ta)
     })
-    const top = sorted.slice(0, 5).map(pred => ({
-      pred,
-      cropPath: bestCropPath(pred),
-      when: formatTimestamp(timestampOf(pred)),
-    }))
+    const top = sorted.slice(0, 5).map(pred => {
+      const det = bestDetection(pred)
+      return {
+        pred,
+        cropPath: det?.crop_gcs_path || null,
+        bbox: det?.bbox || null,
+        when: formatTimestamp(timestampOf(pred)),
+      }
+    })
+    const hours  = new Array(24).fill(0)
+    const months = new Array(12).fill(0)
+    for (const pred of preds) {
+      const ts = timestampOf(pred)
+      if (ts.length >= 10) {
+        const h = parseInt(ts.slice(8, 10), 10)
+        if (h >= 0 && h < 24) hours[h]++
+      }
+      if (ts.length >= 6) {
+        const m = parseInt(ts.slice(4, 6), 10) - 1
+        if (m >= 0 && m < 12) months[m]++
+      }
+    }
     cards.push({
       key: commonName,
+      rawName: commonName,
       commonName: capitalize(commonName),
       scientific: preds[0].prediction?.scientific || '',
       count: preds.length,
       top,
+      hours,
+      months,
     })
   }
 
@@ -178,14 +304,32 @@ function timestampOf(pred) {
   return pred.filename ? pred.filename.substring(0, 14) : ''
 }
 
-function bestCropPath(pred) {
+function imagePathOf(pred) {
+  return pred.gcs_path || pred.filepath || ''
+}
+
+function bestDetection(pred) {
   const dets = pred.detections || []
   let best = null
   for (const d of dets) {
-    if (!d.crop_gcs_path) continue
+    if (!d.bbox) continue
     if (!best || (d.conf ?? 0) > (best.conf ?? 0)) best = d
   }
-  return best?.crop_gcs_path || null
+  return best
+}
+
+function bboxStyle(top) {
+  const [bx, by, bw, bh] = top.bbox
+  if (!bw || !bh) return {}
+  const sizeX = (100 / bw).toFixed(2)
+  const sizeY = (100 / bh).toFixed(2)
+  const posX  = (bx / (1 - bw) * 100).toFixed(2)
+  const posY  = (by / (1 - bh) * 100).toFixed(2)
+  return {
+    backgroundImage: `url("${imageUrl(imagePathOf(top.pred))}")`,
+    backgroundSize: `${sizeX}% ${sizeY}%`,
+    backgroundPosition: `${isFinite(posX) ? posX : 0}% ${isFinite(posY) ? posY : 0}%`,
+  }
 }
 
 function formatTimestamp(ts) {
@@ -228,7 +372,8 @@ function formatTimestamp(ts) {
   border: 1px solid var(--border, #e0e0e0);
   border-radius: 8px;
   padding: 12px;
-  background: white;
+  background: var(--surface);
+  color: var(--text);
 }
 .species-card__header {
   display: flex;
@@ -245,36 +390,150 @@ function formatTimestamp(ts) {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
 }
 .species-card__crop {
+  position: relative;
   flex: 0 0 auto;
-  width: 140px;
+  width: 210px;
   padding: 0;
   background: none;
   border: 1px solid var(--border, #e0e0e0);
   border-radius: 6px;
-  overflow: hidden;
   cursor: pointer;
   display: flex;
   flex-direction: column;
 }
+
+.species-card__crop > img:first-of-type { border-radius: 6px 6px 0 0; }
 .species-card__crop:hover { border-color: var(--accent, #2d7d46); }
-.species-card__crop img { display: block; width: 100%; height: 100px; object-fit: cover; }
+.species-card__crop > img:first-of-type { display: block; width: 100%; height: 150px; object-fit: contain; background: var(--surface2); }
+.species-card__crop-bbox {
+  width: 100%;
+  height: 150px;
+  background-repeat: no-repeat;
+  background-color: var(--surface2);
+}
 .species-card__crop-placeholder {
-  height: 100px;
+  height: 150px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #aaa;
+  color: var(--text-muted);
   font-size: 11px;
-  background: #f5f5f5;
+  background: var(--surface2);
 }
+.species-card__body {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.species-card__histogram {
+  flex: 0 0 420px;
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+}
+.histogram__block {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+.histogram__title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-align: center;
+}
+.histogram__chart {
+  display: flex;
+  gap: 4px;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+}
+.histogram__y-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding-bottom: 16px;
+}
+.histogram__bars-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.histogram__svg {
+  display: block;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: visible;
+}
+.histogram__axis {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.histogram__bar {
+  fill: var(--accent, #2d7d46);
+  opacity: 0.7;
+  cursor: pointer;
+  transition: opacity 0.1s;
+}
+.histogram__bar--zero { fill: var(--border); opacity: 0.4; }
+.histogram__bar--hover { opacity: 1; fill: #4ade80; }
+.histogram__labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 0 1px;
+  margin-top: 2px;
+}
+
+.species-view__hist-tooltip {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  background: var(--surface, #1c1c1c);
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+
+.species-view__preview {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  max-width: 80vw;
+  max-height: 80vh;
+  width: auto;
+  height: auto;
+  border: 1px solid var(--border, #444);
+  border-radius: 6px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+}
+
 .species-card__crop-meta {
   display: flex;
   justify-content: space-between;
   padding: 4px 6px;
   font-size: 11px;
-  color: #666;
-  background: #fafafa;
+  color: var(--text-muted);
+  background: var(--surface2);
 }
 </style>

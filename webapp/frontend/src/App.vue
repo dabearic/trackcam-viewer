@@ -79,6 +79,7 @@
           v-else
           :predictions="predictions"
           @select="openModal"
+          @filter="applyHistogramFilter"
         />
       </main>
     </div>
@@ -124,7 +125,7 @@ const error        = ref(null)
 const selectedImage = ref(null)
 const selectedDay  = ref(null)
 const showProcess  = ref(false)
-const view         = ref('gallery')  // 'gallery' | 'species'
+const view         = ref('species')  // 'gallery' | 'species'
 const dataDateFrom = ref('')
 const dataDateTo   = ref('')
 
@@ -139,6 +140,7 @@ const filters = reactive({
   categories: ['animal', 'human', 'vehicle', 'blank', 'unknown'],
   dateFrom: '',
   dateTo: '',
+  hour: null,
 })
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -209,6 +211,11 @@ const filteredPredictions = computed(() => {
     if (!filters.categories.includes(cat)) return false
     if (filters.species && p.prediction?.common_name !== filters.species) return false
     if (filters.minConfidence > 0 && (p.prediction_score ?? 0) < filters.minConfidence / 100) return false
+    if (filters.hour !== null) {
+      const ts = p.captured_at || p.filename || ''
+      const h = ts.length >= 10 ? parseInt(ts.slice(8, 10), 10) : -1
+      if (h !== filters.hour) return false
+    }
     if (from || to) {
       const ts   = p.filename.substring(0, 8)
       const date = `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)}`
@@ -255,6 +262,12 @@ function filenameToDate(filename) {
 }
 
 function openModal(image) { selectedImage.value = image }
+
+function applyHistogramFilter({ species, hour }) {
+  filters.species = species
+  filters.hour    = hour
+  view.value      = 'gallery'
+}
 
 async function onProcessDone() {
   showProcess.value = false
