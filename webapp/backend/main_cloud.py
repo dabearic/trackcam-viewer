@@ -110,6 +110,39 @@ async def get_predictions(uid: str = Depends(verify_token)):
     return {"predictions": predictions}
 
 
+@app.delete("/api/predictions")
+async def delete_prediction(
+    path: str = Query(..., description="GCS object path of the image to delete"),
+    uid: str = Depends(verify_token),
+):
+    """Delete a prediction doc, its source image, and any detection crops."""
+    if not path.startswith(f"images/{uid}/"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    doc_id  = hashlib.md5(path.encode()).hexdigest()
+    doc_ref = _db.collection("users").document(uid).collection("predictions").document(doc_id)
+    snap    = doc_ref.get()
+
+    crop_paths: list[str] = []
+    if snap.exists:
+        for det in (snap.to_dict().get("detections") or []):
+            crop = det.get("crop_gcs_path")
+            if crop and crop.startswith(f"crops/{uid}/"):
+                crop_paths.append(crop)
+
+    for blob_path in [path, *crop_paths]:
+        try:
+            _bucket.blob(blob_path).delete()
+        except Exception:
+            # Blob already missing — continue so we still clean up Firestore
+            pass
+
+    if snap.exists:
+        doc_ref.delete()
+
+    return {"deleted": True, "path": path, "crops_deleted": len(crop_paths)}
+
+
 # ── Image serving (signed URL redirect) ───────────────────────────────────────
 
 @app.get("/api/image")

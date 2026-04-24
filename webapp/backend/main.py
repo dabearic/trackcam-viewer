@@ -300,14 +300,46 @@ def get_image(path: str = Query(...)):
     return FileResponse(path, media_type="image/jpeg")
 
 
-@app.get("/api/preview")
-def get_preview(path: str = Query(...)):
+def _preview_path_for(path: str) -> str:
+    """Path where SpeciesNet's visualiser writes the annotated copy of `path`."""
     preview_dir = str(Path(path).parent / "previews")
     encoded = path.replace(":", "~").replace("/", "~").replace("\\", "~")
-    preview_path = os.path.join(preview_dir, f"anno_{encoded}")
-    if not os.path.isfile(preview_path):
-        raise HTTPException(status_code=404, detail="Preview not found")
-    return FileResponse(preview_path, media_type="image/jpeg")
+    return os.path.join(preview_dir, f"anno_{encoded}")
+
+
+@app.delete("/api/predictions")
+def delete_prediction(path: str = Query(..., description="Filepath of the image to delete")):
+    """Remove an image from predictions.json and delete its file + preview from disk."""
+    if not os.path.isfile(PREDICTIONS_FILE):
+        raise HTTPException(status_code=404, detail="Predictions file not found")
+
+    with open(PREDICTIONS_FILE, encoding="utf-8") as f:
+        data = json.load(f)
+
+    target = _norm_path(path)
+    kept, removed = [], []
+    for p in data.get("predictions", []):
+        if _norm_path(p.get("filepath", "")) == target:
+            removed.append(p)
+        else:
+            kept.append(p)
+
+    if not removed:
+        raise HTTPException(status_code=404, detail="No prediction found for that path")
+
+    data["predictions"] = kept
+    with open(PREDICTIONS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=1)
+
+    # Only delete disk files that were actually listed in predictions.json
+    for fp in (removed[0]["filepath"], _preview_path_for(removed[0]["filepath"])):
+        try:
+            if os.path.isfile(fp):
+                os.unlink(fp)
+        except OSError:
+            pass
+
+    return {"deleted": True, "path": path, "removed_entries": len(removed)}
 
 
 # ---------------------------------------------------------------------------

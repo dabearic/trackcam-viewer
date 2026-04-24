@@ -9,25 +9,39 @@
       </div>
 
       <!-- Individual image cells flow into the grid -->
-      <button
+      <div
         v-for="img in event.images"
         :key="img.filename"
-        class="gallery__thumb"
-        @click="$emit('select', img)"
+        class="gallery__tile"
       >
-        <img
-          :src="imageUrl(img.filepath)"
-          :alt="img.filename"
-          loading="lazy"
-        />
-        <div class="gallery__badge-row">
-          <span
-            v-for="det in detectionCounts(img)"
-            :key="det.label"
-            :class="`badge badge--${det.label}`"
-          >{{ det.label +": " }} {{ det.count}} </span>
-        </div>
-      </button>
+        <button
+          class="gallery__thumb"
+          @click="$emit('select', img)"
+        >
+          <img
+            :src="imageUrl(img.filepath)"
+            :alt="img.filename"
+            loading="lazy"
+          />
+          <div class="gallery__badge-row">
+            <span
+              v-for="det in detectionCounts(img)"
+              :key="det.label"
+              :class="`badge badge--${det.label}`"
+            >{{ det.label +": " }} {{ det.count}} </span>
+          </div>
+        </button>
+        <button
+          class="gallery__delete"
+          title="Delete image"
+          @click.stop="$emit('delete', img)"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5Zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5Zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6Z"/>
+            <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1ZM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118ZM2.5 3h11V2h-11v1Z"/>
+          </svg>
+        </button>
+      </div>
     </template>
   </div>
 </template>
@@ -35,7 +49,7 @@
 <script setup>
 import { imageUrl } from '../firebase.js'
 const props = defineProps({ events: Array })
-defineEmits(['select', 'day-select'])
+defineEmits(['select', 'day-select', 'delete'])
 
 function dayData(event) {
   const dayPrefix = event.timestamp.substring(0, 8)
@@ -123,6 +137,14 @@ function detectionCounts(img) {
   color: var(--text-muted);
 }
 
+.gallery__tile {
+  position: relative;
+}
+
+.gallery__tile:hover .gallery__delete {
+  opacity: 1;
+}
+
 .gallery__thumb {
   position: relative;
   aspect-ratio: 4/3;
@@ -133,10 +155,46 @@ function detectionCounts(img) {
   padding: 0;
   cursor: pointer;
   transition: opacity 0.15s;
+  width: 100%;
+  display: block;
 }
 
 .gallery__thumb:hover {
   opacity: 0.85;
+}
+
+.gallery__delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(153, 27, 27, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: #fff;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+  z-index: 2;
+}
+
+.gallery__delete:focus,
+.gallery__tile:focus-within .gallery__delete {
+  opacity: 1;
+}
+
+.gallery__delete:hover {
+  background: #b91c1c;
+}
+
+.gallery__delete svg {
+  width: 15px;
+  height: 15px;
 }
 
 .gallery__thumb img {
