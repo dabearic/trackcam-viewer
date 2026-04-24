@@ -7,6 +7,12 @@
         <span class="modal__filename">{{ image.filename }}</span>
         <div class="modal__toolbar-right">
           <button
+            class="modal__toggle"
+            :class="{ 'modal__toggle--off': !showBoxes }"
+            :title="showBoxes ? 'Hide bounding boxes' : 'Show bounding boxes'"
+            @click="showBoxes = !showBoxes"
+          >{{ showBoxes ? 'Hide boxes' : 'Show boxes' }}</button>
+          <button
             class="modal__delete"
             :disabled="deleting"
             title="Delete image"
@@ -51,7 +57,7 @@
               @load="onImageLoad"
             />
             <!-- Bbox overlays — rendered after image loads -->
-            <template v-if="imageLoaded">
+            <template v-if="imageLoaded && showBoxes">
               <div
                 v-for="(det, i) in significantDetections"
                 :key="i"
@@ -186,6 +192,7 @@ const emit = defineEmits(['close', 'navigate', 'deleted'])
 const confirmingDelete = ref(false)
 const deleting         = ref(false)
 const deleteError      = ref('')
+const showBoxes        = ref(true)
 
 function cancelDelete() {
   if (deleting.value) return
@@ -423,6 +430,7 @@ watch(() => props.image, () => {
 
 .modal__close:hover { color: var(--text); }
 
+.modal__toggle,
 .modal__delete {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -431,6 +439,15 @@ watch(() => props.image, () => {
   padding: 4px 10px;
   font-size: 12px;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.modal__toggle:hover {
+  color: var(--text);
+}
+
+.modal__toggle--off {
+  color: var(--text);
+  background: var(--surface2);
 }
 
 .modal__delete:hover:not(:disabled) {
