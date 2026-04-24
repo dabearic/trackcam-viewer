@@ -205,7 +205,7 @@ async function loadPredictions() {
 }
 
 function _updateDateBounds(preds) {
-  const dates = preds.map(p => filenameToDate(p.filename)).filter(Boolean).sort()
+  const dates = preds.map(predDate).filter(Boolean).sort()
   if (dates.length) {
     dataDateFrom.value = dates[0]
     dataDateTo.value   = dates[dates.length - 1]
@@ -236,13 +236,12 @@ const filteredPredictions = computed(() => {
     if (filters.species && p.prediction?.common_name !== filters.species) return false
     if (filters.minConfidence > 0 && (p.prediction_score ?? 0) < filters.minConfidence / 100) return false
     if (filters.hour !== null) {
-      const ts = p.captured_at || p.filename || ''
-      const h = ts.length >= 10 ? parseInt(ts.slice(8, 10), 10) : -1
+      const h = predHour(p)
       if (h !== filters.hour) return false
     }
     if (from || to) {
-      const ts   = p.filename.substring(0, 8)
-      const date = `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)}`
+      const date = predDate(p)
+      if (!date) return false
       if (from && date < from) return false
       if (to   && date > to)   return false
     }
@@ -253,7 +252,8 @@ const filteredPredictions = computed(() => {
 const groupedEvents = computed(() => {
   const groups = new Map()
   for (const pred of filteredPredictions.value) {
-    const ts = pred.filename.substring(0, 14)
+    const ts = predTs(pred)
+    if (!ts) continue
     if (!groups.has(ts)) groups.set(ts, [])
     groups.get(ts).push(pred)
   }
@@ -274,15 +274,30 @@ const stats = computed(() => ({
 }))
 
 function parseTimestamp(ts) {
+  if (!ts || ts.length < 14) return null
   const y = ts.slice(0,4), mo = ts.slice(4,6), d = ts.slice(6,8)
   const h = ts.slice(8,10), mi = ts.slice(10,12), s = ts.slice(12,14)
   return new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`)
 }
 
-function filenameToDate(filename) {
-  if (!filename || filename.length < 8) return ''
-  const ts = filename.substring(0, 8)
+// Compact 14-char timestamp (YYYYMMDDHHMMSS) preferred from EXIF-derived
+// taken_at, falling back to a YYYYMMDDHHMMSS filename prefix. Returns ''
+// when neither is available.
+function predTs(p) {
+  if (p.taken_at) return p.taken_at.replace(/[-T:]/g, '').slice(0, 14)
+  const m = p.filename?.match(/^(\d{14})/)
+  return m ? m[1] : ''
+}
+
+function predDate(p) {
+  const ts = predTs(p)
+  if (!ts) return ''
   return `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)}`
+}
+
+function predHour(p) {
+  const ts = predTs(p)
+  return ts.length >= 10 ? parseInt(ts.slice(8, 10), 10) : -1
 }
 
 function openModal(image) { selectedImage.value = image }

@@ -6,8 +6,45 @@ import sys
 import tempfile
 import threading
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from PIL import Image
+
+_EXIF_EXIF_IFD           = 0x8769
+_EXIF_DATETIME_ORIGINAL  = 0x9003
+_EXIF_DATETIME_DIGITIZED = 0x9004
+_EXIF_DATETIME           = 0x0132
+
+
+def _parse_exif_datetime(raw) -> Optional[str]:
+    if not raw:
+        return None
+    try:
+        s = raw.strip() if isinstance(raw, str) else str(raw).strip()
+        return datetime.strptime(s, "%Y:%m:%d %H:%M:%S").isoformat()
+    except Exception:
+        return None
+
+
+def _extract_taken_at(path: str) -> Optional[str]:
+    try:
+        with Image.open(path) as img:
+            exif = img.getexif()
+            if not exif:
+                return None
+            try:
+                sub = exif.get_ifd(_EXIF_EXIF_IFD)
+            except Exception:
+                sub = {}
+            for tag in (_EXIF_DATETIME_ORIGINAL, _EXIF_DATETIME_DIGITIZED):
+                parsed = _parse_exif_datetime(sub.get(tag))
+                if parsed:
+                    return parsed
+            return _parse_exif_datetime(exif.get(_EXIF_DATETIME))
+    except Exception:
+        return None
 
 # Regex that matches ANSI escape sequences (colors, cursor moves, etc.)
 _ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\r')
@@ -105,6 +142,7 @@ def load_predictions() -> list:
         result.append({
             "filepath": filepath,
             "filename": filename,
+            "taken_at": _extract_taken_at(filepath),
             "prediction": prediction_label,
             "prediction_score": pred.get("prediction_score"),
             "prediction_source": pred.get("prediction_source"),

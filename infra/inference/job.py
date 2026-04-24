@@ -23,6 +23,42 @@ CROP_CONF_THRESHOLD = 0.2
 CROP_MAX_DIM        = 512
 CROP_JPEG_QUALITY   = 85
 
+_EXIF_EXIF_IFD           = 0x8769
+_EXIF_DATETIME_ORIGINAL  = 0x9003
+_EXIF_DATETIME_DIGITIZED = 0x9004
+_EXIF_DATETIME           = 0x0132
+
+
+def _parse_exif_datetime(raw) -> str | None:
+    """Parse EXIF datetime string ('YYYY:MM:DD HH:MM:SS') to naive ISO."""
+    if not raw:
+        return None
+    try:
+        s = raw.strip() if isinstance(raw, str) else str(raw).strip()
+        return datetime.strptime(s, "%Y:%m:%d %H:%M:%S").isoformat()
+    except Exception:
+        return None
+
+
+def _extract_taken_at(path: str) -> str | None:
+    """Return naive-ISO datetime from EXIF DateTimeOriginal, or None."""
+    try:
+        with Image.open(path) as img:
+            exif = img.getexif()
+            if not exif:
+                return None
+            try:
+                sub = exif.get_ifd(_EXIF_EXIF_IFD)
+            except Exception:
+                sub = {}
+            for tag in (_EXIF_DATETIME_ORIGINAL, _EXIF_DATETIME_DIGITIZED):
+                parsed = _parse_exif_datetime(sub.get(tag))
+                if parsed:
+                    return parsed
+            return _parse_exif_datetime(exif.get(_EXIF_DATETIME))
+    except Exception:
+        return None
+
 # ── ANSI / tqdm helpers (same as local backend) ───────────────────────────────
 _ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\r')
 _TQDM_RE = re.compile(r'^(.+?)\s*:\s*(\d+)%\|[^|]*\|\s*(\d+)/(\d+)')
@@ -233,6 +269,7 @@ def main():
                 "filename":          filename,
                 "folder":            folder,
                 "uid":               uid,
+                "taken_at":          _extract_taken_at(local_fp),
                 "prediction":        prediction_label,
                 "prediction_score":  pred.get("prediction_score"),
                 "prediction_source": pred.get("prediction_source"),
