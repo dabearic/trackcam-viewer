@@ -265,7 +265,8 @@ async def start_process(
         "completed_at": None,
     }
 
-    _db.collection("users").document(uid).collection("jobs").document(job_id).set(job_doc)
+    job_ref = _db.collection("users").document(uid).collection("jobs").document(job_id)
+    job_ref.set(job_doc)
 
     # Trigger Cloud Run Job
     jobs_client = run_v2.JobsClient()
@@ -284,6 +285,15 @@ async def start_process(
             ),
         )
     )
+
+    # Move the job off "pending / Queued" right away so the polling UI sees a
+    # new message instead of sitting silent during container cold-start. The
+    # inference container will overwrite this as soon as main() starts.
+    job_ref.update({
+        "status":  "running",
+        "message": "Starting inference container (cold start can take up to a minute)…",
+        "updated_at": _now(),
+    })
 
     return {"job_id": job_id, "skipped": skipped}
 
