@@ -16,4 +16,14 @@ Write-Host "==> Pushing inference image..."
 docker push $IMAGE
 if ($LASTEXITCODE -ne 0) { throw "docker push failed" }
 
-Write-Host "==> Done. Next job execution will use the new image."
+Write-Host "==> Updating job image and re-applying GPU config..."
+gcloud beta run jobs update speciesnet-inference `
+  --image $IMAGE `
+  --gpu=1 --gpu-type=nvidia-l4 `
+  --execution-environment=gen2 `
+  --no-gpu-zonal-redundancy `
+  --region us-east4 `
+  --project trackcam-viewer
+if ($LASTEXITCODE -ne 0) { throw "gcloud job update failed" }
+
+Write-Host "==> Done."

@@ -126,6 +126,18 @@
             </div>
           </section>
 
+          <!-- EXIF tags -->
+          <section v-if="exifEntries.length || exifLoading" class="panel__section">
+            <h3 class="panel__heading">EXIF</h3>
+            <div v-if="exifLoading" class="panel__exif-loading">Reading…</div>
+            <dl v-else class="panel__meta panel__exif">
+              <template v-for="[k, v] in exifEntries" :key="k">
+                <dt>{{ k }}</dt>
+                <dd>{{ v }}</dd>
+              </template>
+            </dl>
+          </section>
+
           <!-- Failures -->
           <section v-if="image.failures?.length" class="panel__section">
             <h3 class="panel__heading panel__heading--warn">Failures</h3>
@@ -139,6 +151,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import exifr from 'exifr'
 import DetectionCrop from './DetectionCrop.vue'
 import { imageUrl } from '../firebase.js'
 
@@ -166,6 +179,40 @@ const imageSrc = computed(() => {
 const significantDetections = computed(() =>
   (props.image.detections ?? []).filter(d => d.conf >= 0.1)
 )
+
+// ── EXIF tags ─────────────────────────────────────────────────────────────────
+const exifTags    = ref(null)
+const exifLoading = ref(false)
+
+const exifEntries = computed(() => {
+  if (!exifTags.value) return []
+  return Object.entries(exifTags.value)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => [k, formatExifValue(v)])
+    .sort(([a], [b]) => a.localeCompare(b))
+})
+
+function formatExifValue(v) {
+  if (v instanceof Date) return v.toISOString().replace('T', ' ').slice(0, 19)
+  if (Array.isArray(v))  return v.map(formatExifValue).join(', ')
+  if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(4)
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
+
+async function loadExif() {
+  exifTags.value = null
+  exifLoading.value = true
+  try {
+    const url = imageUrl(props.image.filepath)
+    const tags = await exifr.parse(url, { tiff: true, exif: true, gps: true, ifd0: true })
+    exifTags.value = tags || {}
+  } catch (e) {
+    exifTags.value = {}
+  } finally {
+    exifLoading.value = false
+  }
+}
 
 function getCategory(img) {
   const name = img.prediction?.common_name?.toLowerCase()
@@ -235,7 +282,8 @@ watch(() => props.image, () => {
   imageLoaded.value = false
   showPreview.value = false
   hasPreview.value = true
-})
+  loadExif()
+}, { immediate: true })
 </script>
 
 <style scoped>
@@ -529,5 +577,23 @@ watch(() => props.image, () => {
 .panel__failure {
   font-size: 12px;
   color: #f87171;
+}
+
+.panel__exif-loading {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.panel__exif {
+  grid-template-columns: minmax(90px, auto) 1fr;
+  font-size: 11px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.panel__exif dd {
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 </style>
