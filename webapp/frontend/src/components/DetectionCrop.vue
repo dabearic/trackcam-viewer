@@ -4,11 +4,11 @@
       v-if="det.crop_gcs_path"
       :src="imageUrl(det.crop_gcs_path)"
       class="crop__img"
-      :alt="det.label"
+      :alt="label"
     />
     <canvas v-else ref="canvasRef" class="crop__canvas" />
     <span class="crop__badge" :style="{ background: color }">
-      {{ det.label }} {{ (det.conf * 100).toFixed(0) }}%
+      {{ label }} {{ (det.conf * 100).toFixed(0) }}%
     </span>
   </div>
 </template>
@@ -21,6 +21,7 @@ const props = defineProps({
   imageSrc: String,
   det: Object,
   color: String,
+  label: String,
 })
 
 const canvasRef = ref(null)

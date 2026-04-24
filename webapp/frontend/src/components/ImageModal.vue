@@ -7,6 +7,12 @@
         <span class="modal__filename">{{ image.filename }}</span>
         <div class="modal__toolbar-right">
           <button
+            class="modal__toggle"
+            :class="{ 'modal__toggle--off': !showBoxes }"
+            :title="showBoxes ? 'Hide bounding boxes' : 'Show bounding boxes'"
+            @click="showBoxes = !showBoxes"
+          >{{ showBoxes ? 'Hide boxes' : 'Show boxes' }}</button>
+          <button
             class="modal__delete"
             :disabled="deleting"
             title="Delete image"
@@ -37,8 +43,12 @@
       <div class="modal__body">
         <div class="modal__left">
         <!-- Image + bbox overlay -->
-        <div class="modal__image-wrap">
-          <div class="modal__canvas-container" ref="containerRef">
+        <div class="modal__image-wrap" ref="wrapRef">
+          <div
+            class="modal__canvas-container"
+            ref="containerRef"
+            :style="containerStyle"
+          >
             <img
               ref="imgRef"
               :src="imageUrl(image.filepath)"
@@ -47,16 +57,16 @@
               @load="onImageLoad"
             />
             <!-- Bbox overlays — rendered after image loads -->
-            <template v-if="imageLoaded">
+            <template v-if="imageLoaded && showBoxes">
               <div
                 v-for="(det, i) in significantDetections"
                 :key="i"
                 class="modal__bbox"
                 :style="bboxStyle(det)"
-                :title="`${det.label} ${(det.conf * 100).toFixed(0)}%`"
+                :title="`${detectionLabel(det)} ${(det.conf * 100).toFixed(0)}%`"
               >
                 <span class="modal__bbox-label" :style="{ background: categoryColor(det.category) }">
-                  {{ det.label }} {{ (det.conf * 100).toFixed(0) }}%
+                  {{ detectionLabel(det) }} {{ (det.conf * 100).toFixed(0) }}%
                 </span>
               </div>
             </template>
@@ -76,6 +86,7 @@
             :image-src="imageUrl(image.filepath)"
             :det="det"
             :color="categoryColor(det.category)"
+            :label="detectionLabel(det)"
           />
         </div>
         </div><!-- end .modal__left -->
@@ -137,7 +148,7 @@
             <div class="panel__detections">
               <div v-for="(det, i) in significantDetections" :key="i" class="panel__det">
                 <span class="panel__det-dot" :style="{ background: categoryColor(det.category) }"></span>
-                <span>{{ capitalize(det.label) }}</span>
+                <span>{{ detectionLabel(det) }}</span>
                 <span class="panel__det-conf">{{ (det.conf * 100).toFixed(0) }}%</span>
               </div>
             </div>
@@ -181,6 +192,7 @@ const emit = defineEmits(['close', 'navigate', 'deleted'])
 const confirmingDelete = ref(false)
 const deleting         = ref(false)
 const deleteError      = ref('')
+const showBoxes        = ref(true)
 
 function cancelDelete() {
   if (deleting.value) return
@@ -209,7 +221,10 @@ async function doDelete() {
 
 const imgRef = ref(null)
 const containerRef = ref(null)
+const wrapRef = ref(null)
 const imageLoaded = ref(false)
+const containerStyle = ref(null)
+let resizeObserver = null
 
 const currentIndex = computed(() => props.allImages.indexOf(props.image))
 
@@ -269,6 +284,20 @@ function categoryColor(cat) {
   return CATEGORY_COLORS[cat] ?? '#a78bfa'
 }
 
+const NON_SPECIES = new Set(['blank', 'human', 'vehicle'])
+
+function detectionLabel(det) {
+  // For animal detections, show the image's species prediction when it's
+  // an actual species (not a blank/human/vehicle classifier fallback).
+  if (det.category === '1') {
+    const name = props.image.prediction?.common_name
+    if (name && !NON_SPECIES.has(name.toLowerCase())) {
+      return capitalize(name)
+    }
+  }
+  return capitalize(det.label)
+}
+
 function bboxStyle(det) {
   const [x, y, w, h] = det.bbox
   return {
@@ -280,8 +309,25 @@ function bboxStyle(det) {
   }
 }
 
+function computeContainerSize() {
+  const img = imgRef.value
+  const wrap = wrapRef.value
+  if (!img || !wrap || !img.naturalWidth || !img.naturalHeight) return
+  const maxW = wrap.clientWidth
+  const maxH = wrap.clientHeight
+  const ar = img.naturalWidth / img.naturalHeight
+  let w = maxW
+  let h = w / ar
+  if (h > maxH) {
+    h = maxH
+    w = h * ar
+  }
+  containerStyle.value = { width: `${w}px`, height: `${h}px` }
+}
+
 function onImageLoad() {
   imageLoaded.value = true
+  computeContainerSize()
 }
 
 function navigate(delta) {
@@ -303,11 +349,21 @@ function onKeydown(e) {
   if (e.key === 'ArrowRight') navigate(1)
 }
 
-onMounted(() => window.addEventListener('keydown', onKeydown))
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown)
+  if (wrapRef.value && 'ResizeObserver' in window) {
+    resizeObserver = new ResizeObserver(() => computeContainerSize())
+    resizeObserver.observe(wrapRef.value)
+  }
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
+  resizeObserver?.disconnect()
+})
 
 watch(() => props.image, () => {
   imageLoaded.value = false
+  containerStyle.value = null
   confirmingDelete.value = false
   deleteError.value = ''
   loadExif()
@@ -374,6 +430,7 @@ watch(() => props.image, () => {
 
 .modal__close:hover { color: var(--text); }
 
+.modal__toggle,
 .modal__delete {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -382,6 +439,15 @@ watch(() => props.image, () => {
   padding: 4px 10px;
   font-size: 12px;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.modal__toggle:hover {
+  color: var(--text);
+}
+
+.modal__toggle--off {
+  color: var(--text);
+  background: var(--surface2);
 }
 
 .modal__delete:hover:not(:disabled) {
@@ -506,16 +572,13 @@ watch(() => props.image, () => {
 
 .modal__canvas-container {
   position: relative;
-  display: inline-flex;
-  max-width: 100%;
-  max-height: 100%;
+  display: block;
 }
 
 .modal__img {
   display: block;
-  max-width: 100%;
-  max-height: calc(100vh - 160px);
-  object-fit: contain;
+  width: 100%;
+  height: 100%;
 }
 
 .modal__bbox {
