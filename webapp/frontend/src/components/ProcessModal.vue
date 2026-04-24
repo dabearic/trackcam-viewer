@@ -138,7 +138,53 @@
           <strong>Error:</strong> {{ job.message }}
         </div>
 
-        <pre v-if="job.log?.length" ref="logEl" class="progress__log">{{ job.log.join('\n') }}</pre>
+        <!-- Summary shown when the inference job completes -->
+        <section v-if="job.status === 'done' && job.summary" class="summary">
+          <header class="summary__header">
+            <span class="summary__count">
+              {{ job.summary.total }} image{{ job.summary.total === 1 ? '' : 's' }} processed
+            </span>
+            <span v-if="categoryEntries.length" class="summary__badges">
+              <span
+                v-for="[cat, n] in categoryEntries"
+                :key="cat"
+                :class="`badge badge--${cat}`"
+              >{{ cat }}: {{ n }}</span>
+            </span>
+          </header>
+
+          <div v-if="speciesEntries.length" class="summary__species">
+            <span
+              v-for="[name, n] in speciesEntries"
+              :key="name"
+              class="summary__species-chip"
+            >{{ capitalize(name) }} × {{ n }}</span>
+          </div>
+
+          <ul v-if="job.summary.images?.length" class="summary__list">
+            <li
+              v-for="(img, i) in job.summary.images"
+              :key="i"
+              class="summary__row"
+            >
+              <span class="summary__filename" :title="img.filename">{{ img.filename }}</span>
+              <span
+                v-if="img.category"
+                :class="`badge badge--${img.category} summary__label`"
+              >{{ img.common_name ? capitalize(img.common_name) : img.category }}</span>
+              <span v-else class="summary__label summary__label--empty">—</span>
+              <span v-if="img.score" class="summary__score">{{ Math.round(img.score * 100) }}%</span>
+            </li>
+          </ul>
+        </section>
+
+        <!-- Log: always visible while running or on error; collapsed by
+             default on success so the summary takes precedence. -->
+        <pre
+          v-if="job.log?.length && (job.status !== 'done' || !job.summary || showLog)"
+          ref="logEl"
+          class="progress__log"
+        >{{ job.log.join('\n') }}</pre>
 
         <div class="progress__actions">
           <button v-if="job.status === 'done'" class="btn btn--primary" @click="$emit('done')">
@@ -147,6 +193,12 @@
           <button v-if="job.status === 'error' || job.status === 'done'" class="btn" @click="reset">
             Process another folder
           </button>
+          <button
+            v-if="job.log?.length"
+            class="btn summary__log-toggle"
+            type="button"
+            @click="showLog = !showLog"
+          >{{ showLog ? 'Hide log' : 'Show log' }}</button>
         </div>
       </div>
 
@@ -204,6 +256,22 @@ const canClose = computed(() =>
 )
 
 const progressEntries = computed(() => Object.entries(job.value.progress ?? {}))
+
+// Summary tallies, sorted by count desc.
+const categoryEntries = computed(() =>
+  Object.entries(job.value.summary?.by_category ?? {}).sort((a, b) => b[1] - a[1])
+)
+const speciesEntries = computed(() =>
+  Object.entries(job.value.summary?.by_species ?? {}).sort((a, b) => b[1] - a[1])
+)
+
+// Expand/collapse the raw log after success. Log stays visible by default
+// while running or on error.
+const showLog = ref(false)
+
+function capitalize(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
+}
 
 // Show the cold-start/warm-up hint until SpeciesNet starts reporting tqdm
 // progress (or the job finishes). The hint is the key signal that the app
@@ -407,6 +475,7 @@ function reset() {
   stopElapsed()
   elapsedSec.value      = null
   processingStart.value = null
+  showLog.value         = false
 }
 
 // Auto-scroll log
@@ -704,5 +773,103 @@ onUnmounted(() => {
   scrollbar-width: thin;
 }
 
-.progress__actions { display: flex; gap: 8px; }
+.progress__actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Summary panel */
+.summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.summary__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.summary__count {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.summary__badges {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.summary__species {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.summary__species-chip {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.summary__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.summary__row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.summary__row:last-child { border-bottom: none; }
+
+.summary__filename {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary__label {
+  font-size: 11px;
+}
+
+.summary__label--empty {
+  color: var(--text-muted);
+}
+
+.summary__score {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: right;
+}
+
+.summary__log-toggle {
+  margin-left: auto;
+}
 </style>
