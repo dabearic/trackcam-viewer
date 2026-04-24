@@ -58,6 +58,7 @@
           >
             <img
               ref="imgRef"
+              v-show="imageLoaded"
               :src="imageUrl(image.filepath)"
               :alt="image.filename"
               class="modal__img"
