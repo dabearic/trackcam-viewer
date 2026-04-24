@@ -101,8 +101,19 @@
         <div class="progress__status">
           <span :class="`progress__dot progress__dot--${job.status}`"></span>
           <span class="progress__message">{{ job.message }}</span>
+          <span v-if="elapsedSec !== null && job.status !== 'done'" class="progress__elapsed">
+            {{ formatElapsed(elapsedSec) }}
+          </span>
           <span v-if="job.status === 'done'" class="progress__count">✓</span>
         </div>
+
+        <!-- Cold-start / preparing hint while we're waiting for SpeciesNet
+             to start emitting progress bars -->
+        <p v-if="showWaitingHint" class="progress__hint">
+          Starting a fresh inference container and loading the SpeciesNet model.
+          This typically takes 30–60 seconds on the first upload and is much
+          faster on subsequent runs.
+        </p>
 
         <div v-if="progressEntries.length" class="progress__stages">
           <div v-for="[label, p] in progressEntries" :key="label" class="progress__stage">
@@ -179,12 +190,48 @@ const job   = ref({ status: 'running', message: 'Queued', log: [], progress: {} 
 const logEl = ref(null)
 let pollTimer = null
 
+// Elapsed-seconds clock that starts when the processing phase begins.
+// Updating a reactive ref every second is enough to render a live timer;
+// the user gets visible reassurance that the app is still working even
+// when `job.message` hasn't changed in a while (cold-start, model load).
+const elapsedSec      = ref(null)
+const processingStart = ref(null)
+let   elapsedTimer    = null
+
 const canClose = computed(() =>
   phase.value === 'form' ||
   (phase.value === 'processing' && (job.value.status === 'done' || job.value.status === 'error'))
 )
 
 const progressEntries = computed(() => Object.entries(job.value.progress ?? {}))
+
+// Show the cold-start/warm-up hint until SpeciesNet starts reporting tqdm
+// progress (or the job finishes). The hint is the key signal that the app
+// is still working during the silent model-load stretch.
+const showWaitingHint = computed(() =>
+  phase.value === 'processing'
+  && (job.value.status === 'pending' || job.value.status === 'running')
+  && progressEntries.value.length === 0,
+)
+
+function formatElapsed(s) {
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return `${m}:${String(r).padStart(2, '0')}`
+}
+
+function startElapsed() {
+  processingStart.value = Date.now()
+  elapsedSec.value      = 0
+  if (elapsedTimer) clearInterval(elapsedTimer)
+  elapsedTimer = setInterval(() => {
+    elapsedSec.value = Math.floor((Date.now() - processingStart.value) / 1000)
+  }, 1000)
+}
+
+function stopElapsed() {
+  if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null }
+}
 
 // ── File handling (cloud) ─────────────────────────────────────────────────────
 
@@ -304,6 +351,7 @@ async function submitCloud() {
 
   jobId.value = procData.job_id
   phase.value = 'processing'
+  startElapsed()
   startPolling()
 }
 
@@ -324,6 +372,7 @@ async function submitLocal() {
 
   jobId.value = data.job_id
   phase.value = 'processing'
+  startElapsed()
   startPolling()
 }
 
@@ -342,6 +391,7 @@ async function pollJob() {
     if (data.status === 'done' || data.status === 'error') {
       clearInterval(pollTimer)
       pollTimer = null
+      stopElapsed()
     }
   } catch { /* network blip — keep polling */ }
 }
@@ -354,6 +404,9 @@ function reset() {
   uploadDone.value = 0
   uploadTotal.value = 0
   submitError.value = ''
+  stopElapsed()
+  elapsedSec.value      = null
+  processingStart.value = null
 }
 
 // Auto-scroll log
@@ -362,7 +415,10 @@ watch(() => job.value.log, async () => {
   if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
 })
 
-onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
+  stopElapsed()
+})
 </script>
 
 <style scoped>
@@ -552,6 +608,28 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.progress__elapsed {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface2);
+}
+
+.progress__hint {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 
 /* Stage bars */
