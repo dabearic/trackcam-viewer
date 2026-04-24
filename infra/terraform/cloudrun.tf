@@ -106,9 +106,13 @@ resource "google_cloud_run_v2_job" "inference" {
 }
 
 # node_selector (GPU config) is not yet in the Terraform provider schema.
-# Apply it via gcloud after the job is created/updated.
+# Apply it via gcloud after every job create or update so the GPU config
+# is never silently wiped by a Terraform in-place update.
 resource "terraform_data" "inference_gpu" {
-  triggers_replace = [google_cloud_run_v2_job.inference.id]
+  triggers_replace = [
+    google_cloud_run_v2_job.inference.id,
+    var.inference_image,
+  ]
 
   provisioner "local-exec" {
     command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --execution-environment=gen2 --no-gpu-zonal-redundancy --region=${var.region} --project=${var.project_id}"
