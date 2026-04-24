@@ -178,10 +178,10 @@
           </ul>
         </section>
 
-        <!-- Log: always visible while running or on error; collapsed by
-             default on success so the summary takes precedence. -->
+        <!-- Raw log — hidden by default; revealed via the "more details…"
+             toggle at the bottom of the dialog. -->
         <pre
-          v-if="job.log?.length && (job.status !== 'done' || !job.summary || showLog)"
+          v-if="showLog && job.log?.length"
           ref="logEl"
           class="progress__log"
         >{{ job.log.join('\n') }}</pre>
@@ -193,13 +193,17 @@
           <button v-if="job.status === 'error' || job.status === 'done'" class="btn" @click="reset">
             Process another folder
           </button>
-          <button
-            v-if="job.log?.length"
-            class="btn summary__log-toggle"
-            type="button"
-            @click="showLog = !showLog"
-          >{{ showLog ? 'Hide log' : 'Show log' }}</button>
         </div>
+
+        <!-- Details disclosure — stays at the very bottom regardless of
+             job status so the log is never shown without the user
+             opting in. -->
+        <button
+          v-if="job.log?.length"
+          class="progress__details-toggle"
+          type="button"
+          @click="showLog = !showLog"
+        >{{ showLog ? 'Hide details' : 'More details…' }}</button>
       </div>
 
     </div>
@@ -869,7 +873,21 @@ onUnmounted(() => {
   text-align: right;
 }
 
-.summary__log-toggle {
-  margin-left: auto;
+.progress__details-toggle {
+  align-self: center;
+  margin-top: 4px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.progress__details-toggle:hover {
+  color: var(--text);
+  text-decoration: underline;
 }
 </style>
