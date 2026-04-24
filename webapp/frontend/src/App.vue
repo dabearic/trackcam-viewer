@@ -73,6 +73,7 @@
             :events="groupedEvents"
             @select="openModal"
             @day-select="selectedDay = $event"
+            @delete="requestDelete"
           />
         </template>
         <SpeciesView
@@ -90,6 +91,7 @@
       :all-images="filteredPredictions"
       @close="selectedImage = null"
       @navigate="openModal"
+      @deleted="onImageDeleted"
     />
 
     <DaySummary
@@ -103,6 +105,28 @@
       @close="showProcess = false"
       @done="onProcessDone"
     />
+
+    <!-- Gallery-tile delete confirmation -->
+    <div
+      v-if="pendingDelete"
+      class="confirm-backdrop"
+      @click.self="cancelDelete"
+    >
+      <div class="confirm">
+        <h3 class="confirm__title">Delete this image?</h3>
+        <p class="confirm__body">
+          <strong>{{ pendingDelete.filename }}</strong> and any cropped versions
+          will be permanently removed from storage. This cannot be undone.
+        </p>
+        <p v-if="deleteError" class="confirm__error">{{ deleteError }}</p>
+        <div class="confirm__actions">
+          <button class="confirm__btn" :disabled="deleting" @click="cancelDelete">Cancel</button>
+          <button class="confirm__btn confirm__btn--danger" :disabled="deleting" @click="doDelete">
+            {{ deleting ? 'Deleting…' : 'Delete' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Auth initialising -->
@@ -262,6 +286,50 @@ function filenameToDate(filename) {
 }
 
 function openModal(image) { selectedImage.value = image }
+
+function onImageDeleted(image) {
+  const remaining = filteredPredictions.value
+  const idx       = remaining.indexOf(image)
+  const next      = remaining[idx + 1] ?? remaining[idx - 1] ?? null
+  predictions.value = predictions.value.filter(p => p !== image)
+  selectedImage.value = next && next !== image ? next : null
+}
+
+// ── Gallery-tile delete ───────────────────────────────────────────────────────
+const pendingDelete = ref(null)
+const deleting      = ref(false)
+const deleteError   = ref('')
+
+function requestDelete(image) {
+  pendingDelete.value = image
+  deleteError.value   = ''
+}
+
+function cancelDelete() {
+  if (deleting.value) return
+  pendingDelete.value = null
+  deleteError.value   = ''
+}
+
+async function doDelete() {
+  const image = pendingDelete.value
+  if (!image) return
+  deleting.value = true
+  deleteError.value = ''
+  try {
+    const res = await apiFetch(
+      `/api/predictions?path=${encodeURIComponent(image.filepath)}`,
+      { method: 'DELETE' },
+    )
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    predictions.value  = predictions.value.filter(p => p !== image)
+    pendingDelete.value = null
+  } catch (e) {
+    deleteError.value = `Delete failed: ${e.message}`
+  } finally {
+    deleting.value = false
+  }
+}
 
 function applyHistogramFilter({ species, hour }) {
   filters.species = species
@@ -492,4 +560,80 @@ onMounted(() => {
 }
 
 .state-msg--error { color: #f87171; }
+
+/* ── Confirmation dialog (gallery-tile delete) ────────────────────────────── */
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 16px;
+}
+
+.confirm {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.confirm__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.confirm__body {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.confirm__body strong { color: var(--text); }
+
+.confirm__error {
+  margin: 0;
+  font-size: 12px;
+  color: #f87171;
+}
+
+.confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.confirm__btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.confirm__btn:hover:not(:disabled) { background: var(--surface); }
+.confirm__btn:disabled { opacity: 0.5; cursor: default; }
+
+.confirm__btn--danger {
+  background: #7f1d1d;
+  border-color: #b91c1c;
+  color: #fee2e2;
+}
+
+.confirm__btn--danger:hover:not(:disabled) {
+  background: #991b1b;
+}
 </style>

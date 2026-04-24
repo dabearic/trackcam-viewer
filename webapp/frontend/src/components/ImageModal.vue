@@ -7,12 +7,30 @@
         <span class="modal__filename">{{ image.filename }}</span>
         <div class="modal__toolbar-right">
           <button
-            :class="['modal__toggle', { active: showPreview }]"
-            :disabled="!hasPreview"
-            :title="hasPreview ? 'Toggle annotated preview' : 'No preview available'"
-            @click="togglePreview"
-          >Annotated</button>
+            class="modal__delete"
+            :disabled="deleting"
+            title="Delete image"
+            @click="confirmingDelete = true"
+          >Delete</button>
           <button class="modal__close" @click="$emit('close')">✕</button>
+        </div>
+      </div>
+
+      <!-- Delete confirmation overlay -->
+      <div v-if="confirmingDelete" class="confirm-backdrop" @click.self="cancelDelete">
+        <div class="confirm">
+          <h3 class="confirm__title">Delete this image?</h3>
+          <p class="confirm__body">
+            <strong>{{ image.filename }}</strong> and any cropped versions will be
+            permanently removed from storage. This cannot be undone.
+          </p>
+          <p v-if="deleteError" class="confirm__error">{{ deleteError }}</p>
+          <div class="confirm__actions">
+            <button class="confirm__btn" :disabled="deleting" @click="cancelDelete">Cancel</button>
+            <button class="confirm__btn confirm__btn--danger" :disabled="deleting" @click="doDelete">
+              {{ deleting ? 'Deleting…' : 'Delete' }}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -23,14 +41,13 @@
           <div class="modal__canvas-container" ref="containerRef">
             <img
               ref="imgRef"
-              :src="imageSrc"
+              :src="imageUrl(image.filepath)"
               :alt="image.filename"
               class="modal__img"
               @load="onImageLoad"
-              @error="onImageError"
             />
             <!-- Bbox overlays — rendered after image loads -->
-            <template v-if="imageLoaded && !showPreview">
+            <template v-if="imageLoaded">
               <div
                 v-for="(det, i) in significantDetections"
                 :key="i"
@@ -56,7 +73,7 @@
           <DetectionCrop
             v-for="(det, i) in significantDetections"
             :key="i"
-            :image-src="imageSrc"
+            :image-src="imageUrl(image.filepath)"
             :det="det"
             :color="categoryColor(det.category)"
           />
@@ -153,28 +170,48 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import exifr from 'exifr'
 import DetectionCrop from './DetectionCrop.vue'
-import { imageUrl } from '../firebase.js'
+import { imageUrl, apiFetch } from '../firebase.js'
 
 const props = defineProps({
   image: Object,
   allImages: Array,
 })
-const emit = defineEmits(['close', 'navigate'])
+const emit = defineEmits(['close', 'navigate', 'deleted'])
+
+const confirmingDelete = ref(false)
+const deleting         = ref(false)
+const deleteError      = ref('')
+
+function cancelDelete() {
+  if (deleting.value) return
+  confirmingDelete.value = false
+  deleteError.value = ''
+}
+
+async function doDelete() {
+  deleting.value = true
+  deleteError.value = ''
+  try {
+    const res = await apiFetch(
+      `/api/predictions?path=${encodeURIComponent(props.image.filepath)}`,
+      { method: 'DELETE' },
+    )
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const deletedImage = props.image
+    confirmingDelete.value = false
+    emit('deleted', deletedImage)
+  } catch (e) {
+    deleteError.value = `Delete failed: ${e.message}`
+  } finally {
+    deleting.value = false
+  }
+}
 
 const imgRef = ref(null)
 const containerRef = ref(null)
 const imageLoaded = ref(false)
-const showPreview = ref(false)
-const hasPreview = ref(true)
 
 const currentIndex = computed(() => props.allImages.indexOf(props.image))
-
-const imageSrc = computed(() => {
-  if (showPreview.value) {
-    return `/api/preview?path=${encodeURIComponent(props.image.filepath)}`
-  }
-  return imageUrl(props.image.filepath)
-})
 
 const significantDetections = computed(() =>
   (props.image.detections ?? []).filter(d => d.conf >= 0.1)
@@ -247,30 +284,21 @@ function onImageLoad() {
   imageLoaded.value = true
 }
 
-function onImageError() {
-  if (showPreview.value) {
-    hasPreview.value = false
-    showPreview.value = false
-  }
-}
-
-function togglePreview() {
-  imageLoaded.value = false
-  showPreview.value = !showPreview.value
-}
-
 function navigate(delta) {
   const next = props.allImages[currentIndex.value + delta]
   if (next) {
     imageLoaded.value = false
-    showPreview.value = false
-    hasPreview.value = true
     emit('navigate', next)
   }
 }
 
 function onKeydown(e) {
-  if (e.key === 'Escape') emit('close')
+  if (e.key === 'Escape') {
+    if (confirmingDelete.value) cancelDelete()
+    else emit('close')
+    return
+  }
+  if (confirmingDelete.value) return
   if (e.key === 'ArrowLeft')  navigate(-1)
   if (e.key === 'ArrowRight') navigate(1)
 }
@@ -280,8 +308,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 watch(() => props.image, () => {
   imageLoaded.value = false
-  showPreview.value = false
-  hasPreview.value = true
+  confirmingDelete.value = false
+  deleteError.value = ''
   loadExif()
 }, { immediate: true })
 </script>
@@ -331,26 +359,6 @@ watch(() => props.image, () => {
   gap: 8px;
 }
 
-.modal__toggle {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text-muted);
-  padding: 4px 10px;
-  font-size: 12px;
-  transition: color 0.15s, border-color 0.15s;
-}
-
-.modal__toggle.active {
-  border-color: var(--animal);
-  color: var(--animal);
-}
-
-.modal__toggle:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
 .modal__close {
   background: none;
   border: 1px solid var(--border);
@@ -365,6 +373,99 @@ watch(() => props.image, () => {
 }
 
 .modal__close:hover { color: var(--text); }
+
+.modal__delete {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  padding: 4px 10px;
+  font-size: 12px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.modal__delete:hover:not(:disabled) {
+  color: #fca5a5;
+  border-color: #b91c1c;
+  background: rgba(185, 28, 28, 0.12);
+}
+
+.modal__delete:disabled { opacity: 0.5; cursor: default; }
+
+/* Confirmation overlay */
+.confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.confirm {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  width: min(420px, calc(100% - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.confirm__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.confirm__body {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.confirm__body strong { color: var(--text); }
+
+.confirm__error {
+  margin: 0;
+  font-size: 12px;
+  color: #f87171;
+}
+
+.confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.confirm__btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.confirm__btn:hover:not(:disabled) { background: var(--surface); }
+.confirm__btn:disabled { opacity: 0.5; cursor: default; }
+
+.confirm__btn--danger {
+  background: #7f1d1d;
+  border-color: #b91c1c;
+  color: #fee2e2;
+}
+
+.confirm__btn--danger:hover:not(:disabled) {
+  background: #991b1b;
+}
 
 .modal__body {
   display: flex;
