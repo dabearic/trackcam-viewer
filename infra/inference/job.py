@@ -115,6 +115,10 @@ def main():
         job_ref.update(update)
         print(f"[{status}] {message}")
 
+    # First thing: confirm the container is alive so the UI stops showing
+    # the cold-start placeholder set by the web backend.
+    set_status("running", "Container started — reading job config…")
+
     # ── Read job document ─────────────────────────────────────────────────────
     job_doc = job_ref.get().to_dict()
     files   = job_doc["files"]           # list of GCS object paths
@@ -218,6 +222,12 @@ def main():
         now = _now()
         folder = job_doc.get("folder", "")
 
+        # Summary data shown in the upload dialog when the job completes.
+        # Category names mirror the gallery badges (animal/human/vehicle/blank).
+        by_species:  dict[str, int] = {}
+        by_category: dict[str, int] = {}
+        summary_images: list[dict] = []
+
         for pred in output.get("predictions", []):
             local_fp = pred["filepath"]
             gcs_path = path_map.get(local_fp, local_fp)
@@ -289,6 +299,22 @@ def main():
             batch_count += 1
             count += 1
 
+            # ── Accumulate summary data ───────────────────────────────
+            common = prediction_label["common_name"] if prediction_label else None
+            if common:
+                low = common.lower()
+                category = low if low in {"blank", "human", "vehicle"} else "animal"
+                by_species[common] = by_species.get(common, 0) + 1
+                by_category[category] = by_category.get(category, 0) + 1
+            else:
+                category = None
+            summary_images.append({
+                "filename":    filename,
+                "common_name": common,
+                "score":       round(pred.get("prediction_score") or 0, 3),
+                "category":    category,
+            })
+
             if batch_count >= 400:   # Firestore batch limit is 500
                 batch.commit()
                 batch = db.batch()
@@ -297,8 +323,15 @@ def main():
         if batch_count > 0:
             batch.commit()
 
+        summary = {
+            "total":        count,
+            "by_species":   by_species,
+            "by_category":  by_category,
+            "images":       summary_images,
+        }
+
         set_status("done", f"Done — {count} prediction(s) saved",
-                   {"completed_at": now})
+                   {"completed_at": now, "summary": summary})
         print(f"[done] Saved {count} predictions for user {uid}")
 
 

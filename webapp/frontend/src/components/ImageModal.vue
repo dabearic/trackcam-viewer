@@ -43,39 +43,63 @@
       <div class="modal__body">
         <div class="modal__left">
         <!-- Image + bbox overlay -->
-        <div class="modal__image-wrap" ref="wrapRef">
+        <div
+          class="modal__image-wrap"
+          ref="wrapRef"
+          @wheel.prevent="onWheel"
+        >
           <div
             class="modal__canvas-container"
             ref="containerRef"
+            :class="{ 'modal__canvas-container--zoomed': zoom > 1, 'modal__canvas-container--panning': isPanning }"
             :style="containerStyle"
+            @mousedown="onMouseDown"
+            @dblclick="onDoubleClick"
           >
             <img
               ref="imgRef"
+              v-show="imageLoaded"
               :src="imageUrl(image.filepath)"
               :alt="image.filename"
               class="modal__img"
+              draggable="false"
               @load="onImageLoad"
             />
-            <!-- Bbox overlays — rendered after image loads -->
-            <template v-if="imageLoaded && showBoxes">
-              <div
-                v-for="(det, i) in significantDetections"
-                :key="i"
-                class="modal__bbox"
-                :style="bboxStyle(det)"
-                :title="`${detectionLabel(det)} ${(det.conf * 100).toFixed(0)}%`"
+          </div>
+
+          <!-- Bbox overlay: lives OUTSIDE the scaled container so borders
+               and labels render at true screen pixels at any zoom level.
+               Each bbox's position is computed in screen-space from the
+               current zoom/pan/baseSize, so the boxes still track the
+               image exactly as it's panned or zoomed. -->
+          <div
+            v-if="imageLoaded && showBoxes && baseSize.w"
+            class="modal__bbox-overlay"
+          >
+            <div
+              v-for="(det, i) in significantDetections"
+              :key="i"
+              class="modal__bbox"
+              :style="bboxScreenStyle(det)"
+              :title="`${detectionLabel(det)} ${(det.conf * 100).toFixed(0)}%`"
+            >
+              <span
+                class="modal__bbox-label"
+                :style="{ background: categoryColor(det.category) }"
               >
-                <span class="modal__bbox-label" :style="{ background: categoryColor(det.category) }">
-                  {{ detectionLabel(det) }} {{ (det.conf * 100).toFixed(0) }}%
-                </span>
-              </div>
-            </template>
+                {{ detectionLabel(det) }} {{ (det.conf * 100).toFixed(0) }}%
+              </span>
+            </div>
           </div>
 
           <!-- Navigation arrows -->
           <button class="modal__nav modal__nav--prev" @click="navigate(-1)" :disabled="currentIndex <= 0">‹</button>
           <button class="modal__nav modal__nav--next" @click="navigate(1)" :disabled="currentIndex >= allImages.length - 1">›</button>
           <div class="modal__position">{{ currentIndex + 1 }} / {{ allImages.length }}</div>
+          <div v-if="zoom > 1" class="modal__zoom-indicator">
+            {{ Math.round(zoom * 100) }}%
+            <button class="modal__zoom-reset" title="Reset zoom" @click="resetZoom">✕</button>
+          </div>
         </div>
 
         <!-- Detection crop carousel -->
@@ -87,6 +111,12 @@
             :det="det"
             :color="categoryColor(det.category)"
             :label="detectionLabel(det)"
+            :class="{ 'crop--active': zoomedDetIndex === i }"
+            role="button"
+            tabindex="0"
+            @click="onCropClick(i, det)"
+            @keydown.enter.prevent="onCropClick(i, det)"
+            @keydown.space.prevent="onCropClick(i, det)"
           />
         </div>
         </div><!-- end .modal__left -->
@@ -223,8 +253,30 @@ const imgRef = ref(null)
 const containerRef = ref(null)
 const wrapRef = ref(null)
 const imageLoaded = ref(false)
-const containerStyle = ref(null)
+const baseSize = ref({ w: 0, h: 0 })
+const zoom = ref(1)
+const panX = ref(0)
+const panY = ref(0)
+const isPanning = ref(false)
+const zoomedDetIndex = ref(null)   // which crop (if any) the auto-zoom is centred on
 let resizeObserver = null
+let dragStart = null
+
+const MAX_ZOOM = 8
+const MIN_ZOOM = 1
+const AUTO_MAX_ZOOM = 20           // crop-click can push past MAX_ZOOM for tiny detections
+const CROP_FILL_FRACTION = 0.7     // target: bbox covers ~70% of the view's matching dim
+
+const containerStyle = computed(() => {
+  const { w, h } = baseSize.value
+  if (!w || !h) return null
+  return {
+    width:           `${w}px`,
+    height:          `${h}px`,
+    transform:       `translate(${panX.value}px, ${panY.value}px) scale(${zoom.value})`,
+    transformOrigin: '0 0',
+  }
+})
 
 const currentIndex = computed(() => props.allImages.indexOf(props.image))
 
@@ -298,13 +350,28 @@ function detectionLabel(det) {
   return capitalize(det.label)
 }
 
-function bboxStyle(det) {
+/**
+ * Compute a bbox's rect in wrap-local screen pixels for the overlay.
+ *
+ * The overlay is a sibling of the scaled container (not a child), so it
+ * doesn't participate in the CSS transform. Re-deriving `left/top/w/h`
+ * from (zoom, panX, panY, baseSize) here lets the bbox track the image
+ * exactly while its border and label render at native pixel size — no
+ * counter-scaling, no bitmap-scale blur on composite layers.
+ */
+function bboxScreenStyle(det) {
+  const wrap = wrapRef.value
+  const { w: bw, h: bh } = baseSize.value
+  if (!wrap || !bw || !bh) return null
   const [x, y, w, h] = det.bbox
+  const baseX = (wrap.clientWidth  - bw) / 2
+  const baseY = (wrap.clientHeight - bh) / 2
+  const z     = zoom.value
   return {
-    left:   `${x * 100}%`,
-    top:    `${y * 100}%`,
-    width:  `${w * 100}%`,
-    height: `${h * 100}%`,
+    left:        `${baseX + panX.value + x * bw * z}px`,
+    top:         `${baseY + panY.value + y * bh * z}px`,
+    width:       `${w * bw * z}px`,
+    height:      `${h * bh * z}px`,
     borderColor: categoryColor(det.category),
   }
 }
@@ -322,12 +389,155 @@ function computeContainerSize() {
     h = maxH
     w = h * ar
   }
-  containerStyle.value = { width: `${w}px`, height: `${h}px` }
+  baseSize.value = { w, h }
+  clampPan()
 }
 
 function onImageLoad() {
   imageLoaded.value = true
   computeContainerSize()
+}
+
+// ── Zoom + pan ────────────────────────────────────────────────────────────────
+function resetZoom() {
+  zoom.value = 1
+  panX.value = 0
+  panY.value = 0
+  isPanning.value = false
+  zoomedDetIndex.value = null
+  dragStart = null
+}
+
+/**
+ * Auto-zoom the viewport so that `det.bbox` fills ~CROP_FILL_FRACTION of
+ * whichever view dimension the bbox is longer in, then centre the bbox.
+ */
+function zoomToDetection(det) {
+  const wrap = wrapRef.value
+  const { w: baseW, h: baseH } = baseSize.value
+  if (!wrap || !baseW || !baseH || !det?.bbox) return
+  const [bx, by, bw, bh] = det.bbox
+  const bboxPxW = bw * baseW
+  const bboxPxH = bh * baseH
+  if (bboxPxW <= 0 || bboxPxH <= 0) return
+  const wrapW = wrap.clientWidth
+  const wrapH = wrap.clientHeight
+  // Whichever constraint saturates first = bbox fills 70% of that view dim.
+  const zoomA = (CROP_FILL_FRACTION * wrapW) / bboxPxW
+  const zoomB = (CROP_FILL_FRACTION * wrapH) / bboxPxH
+  const newZoom = Math.max(MIN_ZOOM, Math.min(AUTO_MAX_ZOOM, Math.min(zoomA, zoomB)))
+  const baseX = (wrapW - baseW) / 2
+  const baseY = (wrapH - baseH) / 2
+  const centerX = (bx + bw / 2) * baseW
+  const centerY = (by + bh / 2) * baseH
+  panX.value = wrapW / 2 - baseX - centerX * newZoom
+  panY.value = wrapH / 2 - baseY - centerY * newZoom
+  zoom.value = newZoom
+  clampPan()
+}
+
+function onCropClick(i, det) {
+  // Toggle: clicking the currently-auto-zoomed crop resets; clicking any
+  // other crop jumps to it.
+  if (zoomedDetIndex.value === i && zoom.value > 1) {
+    resetZoom()
+    return
+  }
+  zoomToDetection(det)
+  zoomedDetIndex.value = i
+}
+
+function clampPan() {
+  const wrap = wrapRef.value
+  if (!wrap) return
+  const { w, h } = baseSize.value
+  const s = zoom.value
+  const scaledW = w * s
+  const scaledH = h * s
+  // Layout position of the unscaled container inside wrap (flex-centered):
+  const baseX = (wrap.clientWidth  - w) / 2
+  const baseY = (wrap.clientHeight - h) / 2
+  // Image should always cover (or be centered within) wrap.
+  const minX = scaledW > wrap.clientWidth  ? wrap.clientWidth  - scaledW - baseX : -baseX
+  const maxX = scaledW > wrap.clientWidth  ? -baseX                              : -baseX
+  const minY = scaledH > wrap.clientHeight ? wrap.clientHeight - scaledH - baseY : -baseY
+  const maxY = scaledH > wrap.clientHeight ? -baseY                              : -baseY
+  if (scaledW <= wrap.clientWidth)  panX.value = 0
+  else panX.value = Math.min(maxX, Math.max(minX, panX.value))
+  if (scaledH <= wrap.clientHeight) panY.value = 0
+  else panY.value = Math.min(maxY, Math.max(minY, panY.value))
+}
+
+function onWheel(e) {
+  const wrap = wrapRef.value
+  if (!wrap || !baseSize.value.w) return
+  const rect = wrap.getBoundingClientRect()
+  const mouseX = e.clientX - rect.left
+  const mouseY = e.clientY - rect.top
+  const baseX = (wrap.clientWidth  - baseSize.value.w) / 2
+  const baseY = (wrap.clientHeight - baseSize.value.h) / 2
+  const factor = Math.exp(-e.deltaY * 0.0015)
+  // Raise the wheel cap to the current zoom so a crop-click auto-zoom
+  // (which may exceed MAX_ZOOM) isn't snapped back on the next scroll.
+  const maxZoom = Math.max(MAX_ZOOM, zoom.value)
+  const newZoom = Math.max(MIN_ZOOM, Math.min(maxZoom, zoom.value * factor))
+  if (newZoom === zoom.value) return
+  // Preserve the container-local point under the cursor.
+  const cx = (mouseX - baseX - panX.value) / zoom.value
+  const cy = (mouseY - baseY - panY.value) / zoom.value
+  panX.value = mouseX - baseX - cx * newZoom
+  panY.value = mouseY - baseY - cy * newZoom
+  zoom.value = newZoom
+  zoomedDetIndex.value = null
+  clampPan()
+}
+
+function onDoubleClick(e) {
+  const wrap = wrapRef.value
+  if (!wrap || !baseSize.value.w) return
+  if (zoom.value > 1) {
+    resetZoom()
+    return
+  }
+  const rect = wrap.getBoundingClientRect()
+  const mouseX = e.clientX - rect.left
+  const mouseY = e.clientY - rect.top
+  const baseX = (wrap.clientWidth  - baseSize.value.w) / 2
+  const baseY = (wrap.clientHeight - baseSize.value.h) / 2
+  const newZoom = 2.5
+  const cx = mouseX - baseX
+  const cy = mouseY - baseY
+  panX.value = mouseX - baseX - cx * newZoom
+  panY.value = mouseY - baseY - cy * newZoom
+  zoom.value = newZoom
+  zoomedDetIndex.value = null
+  clampPan()
+}
+
+function onMouseDown(e) {
+  if (zoom.value <= 1 || e.button !== 0) return
+  dragStart = { x: e.clientX - panX.value, y: e.clientY - panY.value }
+  isPanning.value = true
+  window.addEventListener('mousemove', onMouseMove)
+  window.addEventListener('mouseup', onMouseUp)
+  e.preventDefault()
+}
+
+function onMouseMove(e) {
+  if (!dragStart) return
+  panX.value = e.clientX - dragStart.x
+  panY.value = e.clientY - dragStart.y
+  // User panned manually — a follow-up click on any crop should re-zoom
+  // rather than reset.
+  zoomedDetIndex.value = null
+  clampPan()
+}
+
+function onMouseUp() {
+  dragStart = null
+  isPanning.value = false
+  window.removeEventListener('mousemove', onMouseMove)
+  window.removeEventListener('mouseup', onMouseUp)
 }
 
 function navigate(delta) {
@@ -358,12 +568,15 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('mousemove', onMouseMove)
+  window.removeEventListener('mouseup', onMouseUp)
   resizeObserver?.disconnect()
 })
 
 watch(() => props.image, () => {
   imageLoaded.value = false
-  containerStyle.value = null
+  baseSize.value = { w: 0, h: 0 }
+  resetZoom()
   confirmingDelete.value = false
   deleteError.value = ''
   loadExif()
@@ -560,6 +773,17 @@ watch(() => props.image, () => {
   scrollbar-color: var(--border) transparent;
 }
 
+.modal__carousel > .crop {
+  cursor: pointer;
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.modal__carousel > .crop:hover {
+  transform: translateY(-1px);
+}
+.modal__carousel > .crop--active {
+  box-shadow: 0 0 0 2px var(--accent, #60a5fa);
+}
+
 .modal__image-wrap {
   flex: 1;
   position: relative;
@@ -573,12 +797,30 @@ watch(() => props.image, () => {
 .modal__canvas-container {
   position: relative;
   display: block;
+  will-change: transform;
 }
+
+.modal__canvas-container--zoomed { cursor: grab; }
+.modal__canvas-container--zoomed.modal__canvas-container--panning { cursor: grabbing; }
+.modal__canvas-container--panning,
+.modal__canvas-container--panning * { user-select: none; }
 
 .modal__img {
   display: block;
   width: 100%;
   height: 100%;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* Screen-space overlay for bounding boxes.
+   Lives outside the scaled .modal__canvas-container so borders and
+   labels always render at native pixel size, no matter how far we've
+   zoomed in. wrap has overflow:hidden so off-screen boxes clip cleanly. */
+.modal__bbox-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
 .modal__bbox {
@@ -589,8 +831,8 @@ watch(() => props.image, () => {
 
 .modal__bbox-label {
   position: absolute;
-  top: -22px;
-  left: -1px;
+  bottom: 100%;
+  left: -2px;
   font-size: 11px;
   font-weight: 600;
   color: #000;
@@ -633,6 +875,38 @@ watch(() => props.image, () => {
   padding: 2px 8px;
   border-radius: 999px;
 }
+
+.modal__zoom-indicator {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  font-size: 12px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+
+.modal__zoom-reset {
+  background: none;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0.7;
+}
+.modal__zoom-reset:hover { opacity: 1; background: rgba(255,255,255,0.15); }
 
 /* Side panel */
 .modal__panel {

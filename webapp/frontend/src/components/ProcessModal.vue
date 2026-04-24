@@ -101,8 +101,19 @@
         <div class="progress__status">
           <span :class="`progress__dot progress__dot--${job.status}`"></span>
           <span class="progress__message">{{ job.message }}</span>
+          <span v-if="elapsedSec !== null && job.status !== 'done'" class="progress__elapsed">
+            {{ formatElapsed(elapsedSec) }}
+          </span>
           <span v-if="job.status === 'done'" class="progress__count">✓</span>
         </div>
+
+        <!-- Cold-start / preparing hint while we're waiting for SpeciesNet
+             to start emitting progress bars -->
+        <p v-if="showWaitingHint" class="progress__hint">
+          Starting a fresh inference container and loading the SpeciesNet model.
+          This typically takes 30–60 seconds on the first upload and is much
+          faster on subsequent runs.
+        </p>
 
         <div v-if="progressEntries.length" class="progress__stages">
           <div v-for="[label, p] in progressEntries" :key="label" class="progress__stage">
@@ -127,7 +138,53 @@
           <strong>Error:</strong> {{ job.message }}
         </div>
 
-        <pre v-if="job.log?.length" ref="logEl" class="progress__log">{{ job.log.join('\n') }}</pre>
+        <!-- Summary shown when the inference job completes -->
+        <section v-if="job.status === 'done' && job.summary" class="summary">
+          <header class="summary__header">
+            <span class="summary__count">
+              {{ job.summary.total }} image{{ job.summary.total === 1 ? '' : 's' }} processed
+            </span>
+            <span v-if="categoryEntries.length" class="summary__badges">
+              <span
+                v-for="[cat, n] in categoryEntries"
+                :key="cat"
+                :class="`badge badge--${cat}`"
+              >{{ cat }}: {{ n }}</span>
+            </span>
+          </header>
+
+          <div v-if="speciesEntries.length" class="summary__species">
+            <span
+              v-for="[name, n] in speciesEntries"
+              :key="name"
+              class="summary__species-chip"
+            >{{ capitalize(name) }} × {{ n }}</span>
+          </div>
+
+          <ul v-if="job.summary.images?.length" class="summary__list">
+            <li
+              v-for="(img, i) in job.summary.images"
+              :key="i"
+              class="summary__row"
+            >
+              <span class="summary__filename" :title="img.filename">{{ img.filename }}</span>
+              <span
+                v-if="img.category"
+                :class="`badge badge--${img.category} summary__label`"
+              >{{ img.common_name ? capitalize(img.common_name) : img.category }}</span>
+              <span v-else class="summary__label summary__label--empty">—</span>
+              <span v-if="img.score" class="summary__score">{{ Math.round(img.score * 100) }}%</span>
+            </li>
+          </ul>
+        </section>
+
+        <!-- Raw log — hidden by default; revealed via the "more details…"
+             toggle at the bottom of the dialog. -->
+        <pre
+          v-if="showLog && job.log?.length"
+          ref="logEl"
+          class="progress__log"
+        >{{ job.log.join('\n') }}</pre>
 
         <div class="progress__actions">
           <button v-if="job.status === 'done'" class="btn btn--primary" @click="$emit('done')">
@@ -137,6 +194,16 @@
             Process another folder
           </button>
         </div>
+
+        <!-- Details disclosure — stays at the very bottom regardless of
+             job status so the log is never shown without the user
+             opting in. -->
+        <button
+          v-if="job.log?.length"
+          class="progress__details-toggle"
+          type="button"
+          @click="showLog = !showLog"
+        >{{ showLog ? 'Hide details' : 'More details…' }}</button>
       </div>
 
     </div>
@@ -179,12 +246,64 @@ const job   = ref({ status: 'running', message: 'Queued', log: [], progress: {} 
 const logEl = ref(null)
 let pollTimer = null
 
+// Elapsed-seconds clock that starts when the processing phase begins.
+// Updating a reactive ref every second is enough to render a live timer;
+// the user gets visible reassurance that the app is still working even
+// when `job.message` hasn't changed in a while (cold-start, model load).
+const elapsedSec      = ref(null)
+const processingStart = ref(null)
+let   elapsedTimer    = null
+
 const canClose = computed(() =>
   phase.value === 'form' ||
   (phase.value === 'processing' && (job.value.status === 'done' || job.value.status === 'error'))
 )
 
 const progressEntries = computed(() => Object.entries(job.value.progress ?? {}))
+
+// Summary tallies, sorted by count desc.
+const categoryEntries = computed(() =>
+  Object.entries(job.value.summary?.by_category ?? {}).sort((a, b) => b[1] - a[1])
+)
+const speciesEntries = computed(() =>
+  Object.entries(job.value.summary?.by_species ?? {}).sort((a, b) => b[1] - a[1])
+)
+
+// Expand/collapse the raw log after success. Log stays visible by default
+// while running or on error.
+const showLog = ref(false)
+
+function capitalize(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
+}
+
+// Show the cold-start/warm-up hint until SpeciesNet starts reporting tqdm
+// progress (or the job finishes). The hint is the key signal that the app
+// is still working during the silent model-load stretch.
+const showWaitingHint = computed(() =>
+  phase.value === 'processing'
+  && (job.value.status === 'pending' || job.value.status === 'running')
+  && progressEntries.value.length === 0,
+)
+
+function formatElapsed(s) {
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return `${m}:${String(r).padStart(2, '0')}`
+}
+
+function startElapsed() {
+  processingStart.value = Date.now()
+  elapsedSec.value      = 0
+  if (elapsedTimer) clearInterval(elapsedTimer)
+  elapsedTimer = setInterval(() => {
+    elapsedSec.value = Math.floor((Date.now() - processingStart.value) / 1000)
+  }, 1000)
+}
+
+function stopElapsed() {
+  if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null }
+}
 
 // ── File handling (cloud) ─────────────────────────────────────────────────────
 
@@ -304,6 +423,7 @@ async function submitCloud() {
 
   jobId.value = procData.job_id
   phase.value = 'processing'
+  startElapsed()
   startPolling()
 }
 
@@ -324,6 +444,7 @@ async function submitLocal() {
 
   jobId.value = data.job_id
   phase.value = 'processing'
+  startElapsed()
   startPolling()
 }
 
@@ -342,6 +463,7 @@ async function pollJob() {
     if (data.status === 'done' || data.status === 'error') {
       clearInterval(pollTimer)
       pollTimer = null
+      stopElapsed()
     }
   } catch { /* network blip — keep polling */ }
 }
@@ -354,6 +476,10 @@ function reset() {
   uploadDone.value = 0
   uploadTotal.value = 0
   submitError.value = ''
+  stopElapsed()
+  elapsedSec.value      = null
+  processingStart.value = null
+  showLog.value         = false
 }
 
 // Auto-scroll log
@@ -362,7 +488,10 @@ watch(() => job.value.log, async () => {
   if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
 })
 
-onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
+  stopElapsed()
+})
 </script>
 
 <style scoped>
@@ -554,6 +683,28 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
   white-space: nowrap;
 }
 
+.progress__elapsed {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface2);
+}
+
+.progress__hint {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
 /* Stage bars */
 .progress__stages { display: flex; flex-direction: column; gap: 8px; }
 
@@ -626,5 +777,117 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
   scrollbar-width: thin;
 }
 
-.progress__actions { display: flex; gap: 8px; }
+.progress__actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Summary panel */
+.summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.summary__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.summary__count {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.summary__badges {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.summary__species {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.summary__species-chip {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.summary__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.summary__row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.summary__row:last-child { border-bottom: none; }
+
+.summary__filename {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary__label {
+  font-size: 11px;
+}
+
+.summary__label--empty {
+  color: var(--text-muted);
+}
+
+.summary__score {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: right;
+}
+
+.progress__details-toggle {
+  align-self: center;
+  margin-top: 4px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.progress__details-toggle:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
 </style>
