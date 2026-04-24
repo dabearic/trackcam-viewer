@@ -102,6 +102,12 @@
             :det="det"
             :color="categoryColor(det.category)"
             :label="detectionLabel(det)"
+            :class="{ 'crop--active': zoomedDetIndex === i }"
+            role="button"
+            tabindex="0"
+            @click="onCropClick(i, det)"
+            @keydown.enter.prevent="onCropClick(i, det)"
+            @keydown.space.prevent="onCropClick(i, det)"
           />
         </div>
         </div><!-- end .modal__left -->
@@ -243,11 +249,14 @@ const zoom = ref(1)
 const panX = ref(0)
 const panY = ref(0)
 const isPanning = ref(false)
+const zoomedDetIndex = ref(null)   // which crop (if any) the auto-zoom is centred on
 let resizeObserver = null
 let dragStart = null
 
 const MAX_ZOOM = 8
 const MIN_ZOOM = 1
+const AUTO_MAX_ZOOM = 20           // crop-click can push past MAX_ZOOM for tiny detections
+const CROP_FILL_FRACTION = 0.7     // target: bbox covers ~70% of the view's matching dim
 
 const containerStyle = computed(() => {
   const { w, h } = baseSize.value
@@ -373,7 +382,47 @@ function resetZoom() {
   panX.value = 0
   panY.value = 0
   isPanning.value = false
+  zoomedDetIndex.value = null
   dragStart = null
+}
+
+/**
+ * Auto-zoom the viewport so that `det.bbox` fills ~CROP_FILL_FRACTION of
+ * whichever view dimension the bbox is longer in, then centre the bbox.
+ */
+function zoomToDetection(det) {
+  const wrap = wrapRef.value
+  const { w: baseW, h: baseH } = baseSize.value
+  if (!wrap || !baseW || !baseH || !det?.bbox) return
+  const [bx, by, bw, bh] = det.bbox
+  const bboxPxW = bw * baseW
+  const bboxPxH = bh * baseH
+  if (bboxPxW <= 0 || bboxPxH <= 0) return
+  const wrapW = wrap.clientWidth
+  const wrapH = wrap.clientHeight
+  // Whichever constraint saturates first = bbox fills 70% of that view dim.
+  const zoomA = (CROP_FILL_FRACTION * wrapW) / bboxPxW
+  const zoomB = (CROP_FILL_FRACTION * wrapH) / bboxPxH
+  const newZoom = Math.max(MIN_ZOOM, Math.min(AUTO_MAX_ZOOM, Math.min(zoomA, zoomB)))
+  const baseX = (wrapW - baseW) / 2
+  const baseY = (wrapH - baseH) / 2
+  const centerX = (bx + bw / 2) * baseW
+  const centerY = (by + bh / 2) * baseH
+  panX.value = wrapW / 2 - baseX - centerX * newZoom
+  panY.value = wrapH / 2 - baseY - centerY * newZoom
+  zoom.value = newZoom
+  clampPan()
+}
+
+function onCropClick(i, det) {
+  // Toggle: clicking the currently-auto-zoomed crop resets; clicking any
+  // other crop jumps to it.
+  if (zoomedDetIndex.value === i && zoom.value > 1) {
+    resetZoom()
+    return
+  }
+  zoomToDetection(det)
+  zoomedDetIndex.value = i
 }
 
 function clampPan() {
@@ -406,7 +455,10 @@ function onWheel(e) {
   const baseX = (wrap.clientWidth  - baseSize.value.w) / 2
   const baseY = (wrap.clientHeight - baseSize.value.h) / 2
   const factor = Math.exp(-e.deltaY * 0.0015)
-  const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom.value * factor))
+  // Raise the wheel cap to the current zoom so a crop-click auto-zoom
+  // (which may exceed MAX_ZOOM) isn't snapped back on the next scroll.
+  const maxZoom = Math.max(MAX_ZOOM, zoom.value)
+  const newZoom = Math.max(MIN_ZOOM, Math.min(maxZoom, zoom.value * factor))
   if (newZoom === zoom.value) return
   // Preserve the container-local point under the cursor.
   const cx = (mouseX - baseX - panX.value) / zoom.value
@@ -414,6 +466,7 @@ function onWheel(e) {
   panX.value = mouseX - baseX - cx * newZoom
   panY.value = mouseY - baseY - cy * newZoom
   zoom.value = newZoom
+  zoomedDetIndex.value = null
   clampPan()
 }
 
@@ -435,6 +488,7 @@ function onDoubleClick(e) {
   panX.value = mouseX - baseX - cx * newZoom
   panY.value = mouseY - baseY - cy * newZoom
   zoom.value = newZoom
+  zoomedDetIndex.value = null
   clampPan()
 }
 
@@ -451,6 +505,9 @@ function onMouseMove(e) {
   if (!dragStart) return
   panX.value = e.clientX - dragStart.x
   panY.value = e.clientY - dragStart.y
+  // User panned manually — a follow-up click on any crop should re-zoom
+  // rather than reset.
+  zoomedDetIndex.value = null
   clampPan()
 }
 
@@ -692,6 +749,17 @@ watch(() => props.image, () => {
   flex-shrink: 0;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
+}
+
+.modal__carousel > .crop {
+  cursor: pointer;
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.modal__carousel > .crop:hover {
+  transform: translateY(-1px);
+}
+.modal__carousel > .crop--active {
+  box-shadow: 0 0 0 2px var(--accent, #60a5fa);
 }
 
 .modal__image-wrap {
