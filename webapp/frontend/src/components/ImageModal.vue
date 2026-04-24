@@ -64,23 +64,31 @@
               draggable="false"
               @load="onImageLoad"
             />
-            <!-- Bbox overlays — rendered after image loads -->
-            <template v-if="imageLoaded && showBoxes">
-              <div
-                v-for="(det, i) in significantDetections"
-                :key="i"
-                class="modal__bbox"
-                :style="bboxStyle(det)"
-                :title="`${detectionLabel(det)} ${(det.conf * 100).toFixed(0)}%`"
+          </div>
+
+          <!-- Bbox overlay: lives OUTSIDE the scaled container so borders
+               and labels render at true screen pixels at any zoom level.
+               Each bbox's position is computed in screen-space from the
+               current zoom/pan/baseSize, so the boxes still track the
+               image exactly as it's panned or zoomed. -->
+          <div
+            v-if="imageLoaded && showBoxes && baseSize.w"
+            class="modal__bbox-overlay"
+          >
+            <div
+              v-for="(det, i) in significantDetections"
+              :key="i"
+              class="modal__bbox"
+              :style="bboxScreenStyle(det)"
+              :title="`${detectionLabel(det)} ${(det.conf * 100).toFixed(0)}%`"
+            >
+              <span
+                class="modal__bbox-label"
+                :style="{ background: categoryColor(det.category) }"
               >
-                <span
-                  class="modal__bbox-label"
-                  :style="{ background: categoryColor(det.category), transform: `scale(${1 / zoom})` }"
-                >
-                  {{ detectionLabel(det) }} {{ (det.conf * 100).toFixed(0) }}%
-                </span>
-              </div>
-            </template>
+                {{ detectionLabel(det) }} {{ (det.conf * 100).toFixed(0) }}%
+              </span>
+            </div>
           </div>
 
           <!-- Navigation arrows -->
@@ -341,16 +349,29 @@ function detectionLabel(det) {
   return capitalize(det.label)
 }
 
-function bboxStyle(det) {
+/**
+ * Compute a bbox's rect in wrap-local screen pixels for the overlay.
+ *
+ * The overlay is a sibling of the scaled container (not a child), so it
+ * doesn't participate in the CSS transform. Re-deriving `left/top/w/h`
+ * from (zoom, panX, panY, baseSize) here lets the bbox track the image
+ * exactly while its border and label render at native pixel size — no
+ * counter-scaling, no bitmap-scale blur on composite layers.
+ */
+function bboxScreenStyle(det) {
+  const wrap = wrapRef.value
+  const { w: bw, h: bh } = baseSize.value
+  if (!wrap || !bw || !bh) return null
   const [x, y, w, h] = det.bbox
+  const baseX = (wrap.clientWidth  - bw) / 2
+  const baseY = (wrap.clientHeight - bh) / 2
+  const z     = zoom.value
   return {
-    left:   `${x * 100}%`,
-    top:    `${y * 100}%`,
-    width:  `${w * 100}%`,
-    height: `${h * 100}%`,
+    left:        `${baseX + panX.value + x * bw * z}px`,
+    top:         `${baseY + panY.value + y * bh * z}px`,
+    width:       `${w * bw * z}px`,
+    height:      `${h * bh * z}px`,
     borderColor: categoryColor(det.category),
-    // Counter-scale the border so it stays visually crisp at any zoom level.
-    borderWidth: `${2 / zoom.value}px`,
   }
 }
 
@@ -791,6 +812,16 @@ watch(() => props.image, () => {
   user-select: none;
 }
 
+/* Screen-space overlay for bounding boxes.
+   Lives outside the scaled .modal__canvas-container so borders and
+   labels always render at native pixel size, no matter how far we've
+   zoomed in. wrap has overflow:hidden so off-screen boxes clip cleanly. */
+.modal__bbox-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 .modal__bbox {
   position: absolute;
   border: 2px solid;
@@ -798,14 +829,9 @@ watch(() => props.image, () => {
 }
 
 .modal__bbox-label {
-  /* Anchor the label just above the bbox's top-left. The inline
-     transform: scale(1/zoom) keeps the label visually the same size at
-     any zoom level; transform-origin pins the bottom-left corner (which
-     sits on the bbox's top edge) so the label stays attached. */
   position: absolute;
   bottom: 100%;
-  left: 0;
-  transform-origin: 0 100%;
+  left: -2px;
   font-size: 11px;
   font-weight: 600;
   color: #000;
