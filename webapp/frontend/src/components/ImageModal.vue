@@ -43,17 +43,25 @@
       <div class="modal__body">
         <div class="modal__left">
         <!-- Image + bbox overlay -->
-        <div class="modal__image-wrap" ref="wrapRef">
+        <div
+          class="modal__image-wrap"
+          ref="wrapRef"
+          @wheel.prevent="onWheel"
+        >
           <div
             class="modal__canvas-container"
             ref="containerRef"
+            :class="{ 'modal__canvas-container--zoomed': zoom > 1, 'modal__canvas-container--panning': isPanning }"
             :style="containerStyle"
+            @mousedown="onMouseDown"
+            @dblclick="onDoubleClick"
           >
             <img
               ref="imgRef"
               :src="imageUrl(image.filepath)"
               :alt="image.filename"
               class="modal__img"
+              draggable="false"
               @load="onImageLoad"
             />
             <!-- Bbox overlays — rendered after image loads -->
@@ -65,7 +73,10 @@
                 :style="bboxStyle(det)"
                 :title="`${detectionLabel(det)} ${(det.conf * 100).toFixed(0)}%`"
               >
-                <span class="modal__bbox-label" :style="{ background: categoryColor(det.category) }">
+                <span
+                  class="modal__bbox-label"
+                  :style="{ background: categoryColor(det.category), transform: `scale(${1 / zoom})` }"
+                >
                   {{ detectionLabel(det) }} {{ (det.conf * 100).toFixed(0) }}%
                 </span>
               </div>
@@ -76,6 +87,10 @@
           <button class="modal__nav modal__nav--prev" @click="navigate(-1)" :disabled="currentIndex <= 0">‹</button>
           <button class="modal__nav modal__nav--next" @click="navigate(1)" :disabled="currentIndex >= allImages.length - 1">›</button>
           <div class="modal__position">{{ currentIndex + 1 }} / {{ allImages.length }}</div>
+          <div v-if="zoom > 1" class="modal__zoom-indicator">
+            {{ Math.round(zoom * 100) }}%
+            <button class="modal__zoom-reset" title="Reset zoom" @click="resetZoom">✕</button>
+          </div>
         </div>
 
         <!-- Detection crop carousel -->
@@ -223,8 +238,27 @@ const imgRef = ref(null)
 const containerRef = ref(null)
 const wrapRef = ref(null)
 const imageLoaded = ref(false)
-const containerStyle = ref(null)
+const baseSize = ref({ w: 0, h: 0 })
+const zoom = ref(1)
+const panX = ref(0)
+const panY = ref(0)
+const isPanning = ref(false)
 let resizeObserver = null
+let dragStart = null
+
+const MAX_ZOOM = 8
+const MIN_ZOOM = 1
+
+const containerStyle = computed(() => {
+  const { w, h } = baseSize.value
+  if (!w || !h) return null
+  return {
+    width:           `${w}px`,
+    height:          `${h}px`,
+    transform:       `translate(${panX.value}px, ${panY.value}px) scale(${zoom.value})`,
+    transformOrigin: '0 0',
+  }
+})
 
 const currentIndex = computed(() => props.allImages.indexOf(props.image))
 
@@ -306,6 +340,8 @@ function bboxStyle(det) {
     width:  `${w * 100}%`,
     height: `${h * 100}%`,
     borderColor: categoryColor(det.category),
+    // Counter-scale the border so it stays visually crisp at any zoom level.
+    borderWidth: `${2 / zoom.value}px`,
   }
 }
 
@@ -322,12 +358,107 @@ function computeContainerSize() {
     h = maxH
     w = h * ar
   }
-  containerStyle.value = { width: `${w}px`, height: `${h}px` }
+  baseSize.value = { w, h }
+  clampPan()
 }
 
 function onImageLoad() {
   imageLoaded.value = true
   computeContainerSize()
+}
+
+// ── Zoom + pan ────────────────────────────────────────────────────────────────
+function resetZoom() {
+  zoom.value = 1
+  panX.value = 0
+  panY.value = 0
+  isPanning.value = false
+  dragStart = null
+}
+
+function clampPan() {
+  const wrap = wrapRef.value
+  if (!wrap) return
+  const { w, h } = baseSize.value
+  const s = zoom.value
+  const scaledW = w * s
+  const scaledH = h * s
+  // Layout position of the unscaled container inside wrap (flex-centered):
+  const baseX = (wrap.clientWidth  - w) / 2
+  const baseY = (wrap.clientHeight - h) / 2
+  // Image should always cover (or be centered within) wrap.
+  const minX = scaledW > wrap.clientWidth  ? wrap.clientWidth  - scaledW - baseX : -baseX
+  const maxX = scaledW > wrap.clientWidth  ? -baseX                              : -baseX
+  const minY = scaledH > wrap.clientHeight ? wrap.clientHeight - scaledH - baseY : -baseY
+  const maxY = scaledH > wrap.clientHeight ? -baseY                              : -baseY
+  if (scaledW <= wrap.clientWidth)  panX.value = 0
+  else panX.value = Math.min(maxX, Math.max(minX, panX.value))
+  if (scaledH <= wrap.clientHeight) panY.value = 0
+  else panY.value = Math.min(maxY, Math.max(minY, panY.value))
+}
+
+function onWheel(e) {
+  const wrap = wrapRef.value
+  if (!wrap || !baseSize.value.w) return
+  const rect = wrap.getBoundingClientRect()
+  const mouseX = e.clientX - rect.left
+  const mouseY = e.clientY - rect.top
+  const baseX = (wrap.clientWidth  - baseSize.value.w) / 2
+  const baseY = (wrap.clientHeight - baseSize.value.h) / 2
+  const factor = Math.exp(-e.deltaY * 0.0015)
+  const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom.value * factor))
+  if (newZoom === zoom.value) return
+  // Preserve the container-local point under the cursor.
+  const cx = (mouseX - baseX - panX.value) / zoom.value
+  const cy = (mouseY - baseY - panY.value) / zoom.value
+  panX.value = mouseX - baseX - cx * newZoom
+  panY.value = mouseY - baseY - cy * newZoom
+  zoom.value = newZoom
+  clampPan()
+}
+
+function onDoubleClick(e) {
+  const wrap = wrapRef.value
+  if (!wrap || !baseSize.value.w) return
+  if (zoom.value > 1) {
+    resetZoom()
+    return
+  }
+  const rect = wrap.getBoundingClientRect()
+  const mouseX = e.clientX - rect.left
+  const mouseY = e.clientY - rect.top
+  const baseX = (wrap.clientWidth  - baseSize.value.w) / 2
+  const baseY = (wrap.clientHeight - baseSize.value.h) / 2
+  const newZoom = 2.5
+  const cx = mouseX - baseX
+  const cy = mouseY - baseY
+  panX.value = mouseX - baseX - cx * newZoom
+  panY.value = mouseY - baseY - cy * newZoom
+  zoom.value = newZoom
+  clampPan()
+}
+
+function onMouseDown(e) {
+  if (zoom.value <= 1 || e.button !== 0) return
+  dragStart = { x: e.clientX - panX.value, y: e.clientY - panY.value }
+  isPanning.value = true
+  window.addEventListener('mousemove', onMouseMove)
+  window.addEventListener('mouseup', onMouseUp)
+  e.preventDefault()
+}
+
+function onMouseMove(e) {
+  if (!dragStart) return
+  panX.value = e.clientX - dragStart.x
+  panY.value = e.clientY - dragStart.y
+  clampPan()
+}
+
+function onMouseUp() {
+  dragStart = null
+  isPanning.value = false
+  window.removeEventListener('mousemove', onMouseMove)
+  window.removeEventListener('mouseup', onMouseUp)
 }
 
 function navigate(delta) {
@@ -358,12 +489,15 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('mousemove', onMouseMove)
+  window.removeEventListener('mouseup', onMouseUp)
   resizeObserver?.disconnect()
 })
 
 watch(() => props.image, () => {
   imageLoaded.value = false
-  containerStyle.value = null
+  baseSize.value = { w: 0, h: 0 }
+  resetZoom()
   confirmingDelete.value = false
   deleteError.value = ''
   loadExif()
@@ -573,12 +707,20 @@ watch(() => props.image, () => {
 .modal__canvas-container {
   position: relative;
   display: block;
+  will-change: transform;
 }
+
+.modal__canvas-container--zoomed { cursor: grab; }
+.modal__canvas-container--zoomed.modal__canvas-container--panning { cursor: grabbing; }
+.modal__canvas-container--panning,
+.modal__canvas-container--panning * { user-select: none; }
 
 .modal__img {
   display: block;
   width: 100%;
   height: 100%;
+  -webkit-user-drag: none;
+  user-select: none;
 }
 
 .modal__bbox {
@@ -588,9 +730,14 @@ watch(() => props.image, () => {
 }
 
 .modal__bbox-label {
+  /* Anchor the label just above the bbox's top-left. The inline
+     transform: scale(1/zoom) keeps the label visually the same size at
+     any zoom level; transform-origin pins the bottom-left corner (which
+     sits on the bbox's top edge) so the label stays attached. */
   position: absolute;
-  top: -22px;
-  left: -1px;
+  bottom: 100%;
+  left: 0;
+  transform-origin: 0 100%;
   font-size: 11px;
   font-weight: 600;
   color: #000;
@@ -633,6 +780,38 @@ watch(() => props.image, () => {
   padding: 2px 8px;
   border-radius: 999px;
 }
+
+.modal__zoom-indicator {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  font-size: 12px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+
+.modal__zoom-reset {
+  background: none;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0.7;
+}
+.modal__zoom-reset:hover { opacity: 1; background: rgba(255,255,255,0.15); }
 
 /* Side panel */
 .modal__panel {
