@@ -110,9 +110,8 @@
         <!-- Cold-start / preparing hint while we're waiting for SpeciesNet
              to start emitting progress bars -->
         <p v-if="showWaitingHint" class="progress__hint">
-          Starting a fresh inference container and loading the SpeciesNet model.
-          This typically takes 30–60 seconds on the first upload and is much
-          faster on subsequent runs.
+          Loading the AI model. This typically takes 30–60 seconds on the
+          first upload and is much faster on subsequent runs.
         </p>
 
         <div v-if="progressEntries.length" class="progress__stages">
