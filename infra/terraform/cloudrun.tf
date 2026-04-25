@@ -95,6 +95,25 @@ resource "google_cloud_run_v2_job" "inference" {
           name  = "GCP_PROJECT"
           value = var.project_id
         }
+        # Redirect kagglehub's cache onto the GCS-mounted volume so the
+        # SpeciesNet weights persist across job invocations.
+        env {
+          name  = "KAGGLEHUB_CACHE"
+          value = "/mnt/model-cache"
+        }
+
+        volume_mounts {
+          name       = "model-cache"
+          mount_path = "/mnt/model-cache"
+        }
+      }
+
+      volumes {
+        name = "model-cache"
+        gcs {
+          bucket    = google_storage_bucket.model_cache.name
+          read_only = false
+        }
       }
     }
   }
@@ -115,7 +134,7 @@ resource "terraform_data" "inference_gpu" {
   ]
 
   provisioner "local-exec" {
-    command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --execution-environment=gen2 --no-gpu-zonal-redundancy --region=${var.region} --project=${var.project_id}"
+    command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --execution-environment=gen2 --gpu-zonal-redundancy --region=${var.region} --project=${var.project_id}"
   }
 
   depends_on = [google_cloud_run_v2_job.inference]
