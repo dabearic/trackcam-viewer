@@ -24,7 +24,7 @@ gcloud beta run jobs update speciesnet-inference `
   --image $IMAGE `
   --gpu=1 --gpu-type=nvidia-l4 `
   --execution-environment=gen2 `
-  --gpu-zonal-redundancy `
+  --no-gpu-zonal-redundancy `
   --update-env-vars=KAGGLEHUB_CACHE=/mnt/model-cache `
   --clear-volumes `
   --clear-volume-mounts `

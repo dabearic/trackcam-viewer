@@ -123,7 +123,11 @@ resource "terraform_data" "inference_gpu" {
   ]
 
   provisioner "local-exec" {
-    command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --execution-environment=gen2 --gpu-zonal-redundancy --update-env-vars=KAGGLEHUB_CACHE=/mnt/model-cache --clear-volumes --clear-volume-mounts --add-volume=name=model-cache,type=cloud-storage,bucket=${google_storage_bucket.model_cache.name} --add-volume-mount=volume=model-cache,mount-path=/mnt/model-cache --region=${var.region} --project=${var.project_id}"
+    # NOTE: --no-gpu-zonal-redundancy is not optional for GPU jobs.
+    # Per Google's error: "Currently Cloud Run jobs are unable to offer
+    # GPU enabled instances with zonal redundancy due to capacity
+    # limitations." See https://cloud.google.com/run/docs/configuring/jobs/gpu#zonal-redundancy
+    command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --execution-environment=gen2 --no-gpu-zonal-redundancy --update-env-vars=KAGGLEHUB_CACHE=/mnt/model-cache --clear-volumes --clear-volume-mounts --add-volume=name=model-cache,type=cloud-storage,bucket=${google_storage_bucket.model_cache.name} --add-volume-mount=volume=model-cache,mount-path=/mnt/model-cache --region=${var.region} --project=${var.project_id}"
   }
 
   depends_on = [google_cloud_run_v2_job.inference]
