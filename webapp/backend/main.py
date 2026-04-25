@@ -160,6 +160,22 @@ class DetectionPatch(BaseModel):
             raise ValueError(f"category must be one of {sorted(VALID_CATEGORIES)}")
 
 
+class DetectionBulkPatch(BaseModel):
+    """Apply the same partial update to every detection on an image that
+    matches `category_filter`. If `category_filter` is None, every detection
+    is updated. Useful for re-labelling a flock of birds in one click."""
+    category_filter: Optional[str] = None
+    category:        Optional[str] = None
+    label:           Optional[str] = None
+    conf:            Optional[confloat(ge=0.0, le=1.0)] = None
+    scientific:      Optional[str] = None
+
+    def model_post_init(self, __context) -> None:
+        for fld, val in (("category", self.category), ("category_filter", self.category_filter)):
+            if val is not None and val not in VALID_CATEGORIES:
+                raise ValueError(f"{fld} must be one of {sorted(VALID_CATEGORIES)}")
+
+
 def _load_raw_predictions() -> dict:
     """Read predictions.json and backfill missing detection IDs in place.
 
@@ -518,6 +534,33 @@ def patch_detection(
     det["manual"] = True
     _save_raw_predictions(data)
     return {"updated": True, "detection": det}
+
+
+@app.patch("/api/predictions/detections/bulk")
+def patch_detections_bulk(
+    body: DetectionBulkPatch,
+    path: str = Query(..., description="Image filepath"),
+):
+    """Apply the same partial update to many detections at once. Each
+    matched detection is flipped to manual:true. Returns the count + the
+    updated detections so the frontend can splice them into local state."""
+    data = _load_raw_predictions()
+    pred = _find_prediction(data, path)
+    if pred is None:
+        raise HTTPException(status_code=404, detail="No prediction for that path")
+    updated: list[dict] = []
+    for det in (pred.get("detections") or []):
+        if body.category_filter and det.get("category") != body.category_filter:
+            continue
+        if body.category   is not None: det["category"]   = body.category
+        if body.label      is not None: det["label"]      = body.label
+        if body.conf       is not None: det["conf"]       = float(body.conf)
+        if body.scientific is not None: det["scientific"] = body.scientific
+        det["manual"] = True
+        updated.append(det)
+    if updated:
+        _save_raw_predictions(data)
+    return {"updated": len(updated), "detections": updated}
 
 
 @app.post("/api/predictions/detections", status_code=201)

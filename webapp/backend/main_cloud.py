@@ -386,6 +386,21 @@ class DetectionPatch(BaseModel):
             raise ValueError(f"category must be one of {sorted(VALID_CATEGORIES)}")
 
 
+class DetectionBulkPatch(BaseModel):
+    """Same partial update applied to every detection that matches
+    category_filter (or every detection if the filter is None)."""
+    category_filter: Optional[str] = None
+    category:        Optional[str] = None
+    label:           Optional[str] = None
+    conf:            Optional[confloat(ge=0.0, le=1.0)] = None
+    scientific:      Optional[str] = None
+
+    def model_post_init(self, __context) -> None:
+        for fld, val in (("category", self.category), ("category_filter", self.category_filter)):
+            if val is not None and val not in VALID_CATEGORIES:
+                raise ValueError(f"{fld} must be one of {sorted(VALID_CATEGORIES)}")
+
+
 def _prediction_doc_ref(uid: str, path: str):
     """Locate the Firestore doc for a given user + GCS path."""
     doc_id = hashlib.md5(path.encode()).hexdigest()
@@ -448,6 +463,31 @@ async def patch_detection(
     target["manual"] = True
     doc_ref.update({"detections": detections})
     return {"updated": True, "detection": target}
+
+
+@app.patch("/api/predictions/detections/bulk")
+async def patch_detections_bulk(
+    body: DetectionBulkPatch,
+    path: str = Query(..., description="GCS path of the image"),
+    uid:  str = Depends(verify_token),
+):
+    """Apply the same partial update to many detections at once. Useful for
+    re-labelling a flock of birds without clicking through each box."""
+    _ensure_path_owned(uid, path)
+    doc_ref, _data, detections = _load_detections(uid, path)
+    updated: list[dict] = []
+    for det in detections:
+        if body.category_filter and det.get("category") != body.category_filter:
+            continue
+        if body.category   is not None: det["category"]   = body.category
+        if body.label      is not None: det["label"]      = body.label
+        if body.conf       is not None: det["conf"]       = float(body.conf)
+        if body.scientific is not None: det["scientific"] = body.scientific
+        det["manual"] = True
+        updated.append(det)
+    if updated:
+        doc_ref.update({"detections": detections})
+    return {"updated": len(updated), "detections": updated}
 
 
 @app.post("/api/predictions/detections", status_code=201)
