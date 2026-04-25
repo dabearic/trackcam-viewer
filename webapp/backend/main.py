@@ -542,8 +542,15 @@ def patch_detections_bulk(
     path: str = Query(..., description="Image filepath"),
 ):
     """Apply the same partial update to many detections at once. Each
-    matched detection is flipped to manual:true. Returns the count + the
-    updated detections so the frontend can splice them into local state."""
+    matched detection is flipped to manual:true.
+
+    When the user gives the bulk a new species label, we ALSO rewrite the
+    image-level prediction. That's the field the gallery filter and the
+    SpeciesView tree are built from — without this propagation, a flock
+    bulk-relabelled to "American Robin" wouldn't appear under "American
+    Robin" anywhere outside the modal. Best-effort GBIF lookup synthesises
+    a SpeciesNet-style raw label so SpeciesView places the species under
+    its real taxonomic branch instead of "unknown"."""
     data = _load_raw_predictions()
     pred = _find_prediction(data, path)
     if pred is None:
@@ -558,9 +565,22 @@ def patch_detections_bulk(
         if body.scientific is not None: det["scientific"] = body.scientific
         det["manual"] = True
         updated.append(det)
+
+    new_prediction: Optional[dict] = None
+    if updated and body.label:
+        new_prediction = _build_synthetic_prediction(body.label, body.scientific or "")
+        # predictions.json stores `prediction` as a raw SpeciesNet-style
+        # string; load_predictions parses it on read.
+        pred["prediction"] = new_prediction["raw"]
+        pred["prediction_source"] = "manual"
+
     if updated:
         _save_raw_predictions(data)
-    return {"updated": len(updated), "detections": updated}
+
+    response: dict = {"updated": len(updated), "detections": updated}
+    if new_prediction is not None:
+        response["prediction"] = new_prediction
+    return response
 
 
 @app.post("/api/predictions/detections", status_code=201)
@@ -630,6 +650,80 @@ def _save_custom_species(species: list) -> None:
 _HTTP_USER_AGENT = "TrailCam-Viewer/0.1 (+https://github.com/dabearic/trackcam-viewer)"
 _GBIF_CACHE: dict[str, dict] = {}
 _INAT_CACHE: dict[str, dict] = {}
+
+
+def _lookup_taxonomy_silent(name: str) -> Optional[dict]:
+    """Same as species_lookup but returns None on any failure — used by
+    the bulk endpoint where a missing taxonomy shouldn't fail the whole
+    edit. Shares the _GBIF_CACHE with species_lookup so a successful
+    lookup either side is reused."""
+    if not name or not name.strip():
+        return None
+    key = name.strip().lower()
+    if key in _GBIF_CACHE:
+        return _GBIF_CACHE[key]
+    try:
+        url = "https://api.gbif.org/v1/species/match?" + urllib.parse.urlencode({
+            "name": name.strip(), "strict": "false",
+        })
+        req = urllib.request.Request(url, headers={"User-Agent": _HTTP_USER_AGENT})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            raw = json.loads(resp.read())
+    except Exception:
+        return None
+    if raw.get("matchType") == "NONE":
+        return None
+    result = {
+        "kingdom":    raw.get("kingdom", ""),
+        "phylum":     raw.get("phylum", ""),
+        "class":      raw.get("class", ""),
+        "order":      raw.get("order", ""),
+        "family":     raw.get("family", ""),
+        "genus":      raw.get("genus", ""),
+        "species":    raw.get("species", ""),
+        "scientific": raw.get("scientificName") or raw.get("canonicalName") or "",
+        "rank":       raw.get("rank", ""),
+        "match_type": raw.get("matchType", ""),
+        "confidence": raw.get("confidence", 0),
+    }
+    _GBIF_CACHE[key] = result
+    return result
+
+
+def _build_synthetic_prediction(common_name: str, scientific: str = "") -> dict:
+    """Synthesise a parsed-prediction dict for a manual species edit.
+
+    'raw' mirrors SpeciesNet's 7-field label format
+    ('uuid;class;order;family;genus;species_epithet;common_name') so
+    SpeciesView's tree can place the species under its real taxonomic
+    branch. Best-effort GBIF lookup — if it fails, we still return a
+    valid (but flat) prediction so the bulk save itself doesn't error.
+    """
+    tax = _lookup_taxonomy_silent(scientific or common_name) or {}
+    species_full = tax.get("species") or ""
+    genus = tax.get("genus") or ""
+    if species_full and genus and species_full.lower().startswith(genus.lower()):
+        epithet = species_full[len(genus):].strip()
+    elif species_full:
+        # Fall back to the trailing word of "Genus species" / "Genus species subsp."
+        epithet = species_full.split()[-1]
+    else:
+        epithet = ""
+    raw = ";".join([
+        "",
+        (tax.get("class")  or "").lower(),
+        (tax.get("order")  or "").lower(),
+        (tax.get("family") or "").lower(),
+        (tax.get("genus")  or "").lower(),
+        epithet.lower(),
+        common_name,
+    ])
+    return {
+        "id":          "",
+        "common_name": common_name,
+        "scientific":  tax.get("scientific") or scientific or "",
+        "raw":         raw,
+    }
 
 
 @app.get("/api/species-autocomplete")

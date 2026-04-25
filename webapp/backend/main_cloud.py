@@ -472,7 +472,11 @@ async def patch_detections_bulk(
     uid:  str = Depends(verify_token),
 ):
     """Apply the same partial update to many detections at once. Useful for
-    re-labelling a flock of birds without clicking through each box."""
+    re-labelling a flock of birds without clicking through each box.
+
+    When the user gives the bulk a new species label, ALSO rewrites the
+    image-level prediction so the gallery filter and SpeciesView (which
+    both key off prediction.common_name) reflect the manual species too."""
     _ensure_path_owned(uid, path)
     doc_ref, _data, detections = _load_detections(uid, path)
     updated: list[dict] = []
@@ -485,9 +489,21 @@ async def patch_detections_bulk(
         if body.scientific is not None: det["scientific"] = body.scientific
         det["manual"] = True
         updated.append(det)
+
+    new_prediction: Optional[dict] = None
+    update_doc: dict = {}
     if updated:
-        doc_ref.update({"detections": detections})
-    return {"updated": len(updated), "detections": updated}
+        update_doc["detections"] = detections
+        if body.label:
+            new_prediction = _build_synthetic_prediction(body.label, body.scientific or "")
+            update_doc["prediction"]        = new_prediction
+            update_doc["prediction_source"] = "manual"
+        doc_ref.update(update_doc)
+
+    response: dict = {"updated": len(updated), "detections": updated}
+    if new_prediction is not None:
+        response["prediction"] = new_prediction
+    return response
 
 
 @app.post("/api/predictions/detections", status_code=201)
@@ -560,6 +576,73 @@ async def add_custom_species(
 _HTTP_USER_AGENT = "TrailCam-Viewer/0.1 (+https://github.com/dabearic/trackcam-viewer)"
 _GBIF_CACHE: dict = {}
 _INAT_CACHE: dict = {}
+
+
+def _lookup_taxonomy_silent(name: str) -> Optional[dict]:
+    """Like species_lookup but returns None on any failure. Shared with
+    the bulk endpoint where a missing taxonomy shouldn't fail the whole edit."""
+    if not name or not name.strip():
+        return None
+    key = name.strip().lower()
+    if key in _GBIF_CACHE:
+        return _GBIF_CACHE[key]
+    try:
+        url = "https://api.gbif.org/v1/species/match?" + urllib.parse.urlencode({
+            "name": name.strip(), "strict": "false",
+        })
+        req = urllib.request.Request(url, headers={"User-Agent": _HTTP_USER_AGENT})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            raw = json.loads(resp.read())
+    except Exception:
+        return None
+    if raw.get("matchType") == "NONE":
+        return None
+    result = {
+        "kingdom":    raw.get("kingdom", ""),
+        "phylum":     raw.get("phylum", ""),
+        "class":      raw.get("class", ""),
+        "order":      raw.get("order", ""),
+        "family":     raw.get("family", ""),
+        "genus":      raw.get("genus", ""),
+        "species":    raw.get("species", ""),
+        "scientific": raw.get("scientificName") or raw.get("canonicalName") or "",
+        "rank":       raw.get("rank", ""),
+        "match_type": raw.get("matchType", ""),
+        "confidence": raw.get("confidence", 0),
+    }
+    _GBIF_CACHE[key] = result
+    return result
+
+
+def _build_synthetic_prediction(common_name: str, scientific: str = "") -> dict:
+    """Synthesise a parsed-prediction dict for a manual species edit.
+    Matches the shape inference writes to Firestore — id/common_name/
+    scientific/raw — so the frontend doesn't need to special-case manual
+    vs. inferred predictions."""
+    tax = _lookup_taxonomy_silent(scientific or common_name) or {}
+    species_full = tax.get("species") or ""
+    genus = tax.get("genus") or ""
+    if species_full and genus and species_full.lower().startswith(genus.lower()):
+        epithet = species_full[len(genus):].strip()
+    elif species_full:
+        epithet = species_full.split()[-1]
+    else:
+        epithet = ""
+    raw = ";".join([
+        "",
+        (tax.get("class")  or "").lower(),
+        (tax.get("order")  or "").lower(),
+        (tax.get("family") or "").lower(),
+        (tax.get("genus")  or "").lower(),
+        epithet.lower(),
+        common_name,
+    ])
+    return {
+        "id":          "",
+        "common_name": common_name,
+        "scientific":  tax.get("scientific") or scientific or "",
+        "raw":         raw,
+    }
 
 
 @app.get("/api/species-lookup")
