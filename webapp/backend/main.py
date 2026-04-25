@@ -584,8 +584,57 @@ def _save_custom_species(species: list) -> None:
 # autofill higher-order taxa (class/order/family) when the user adds a new
 # species. GBIF's match endpoint is free and unauthenticated; the proxy
 # also keeps the GBIF URL out of the browser (CORS / future swap).
-_GBIF_USER_AGENT = "TrailCam-Viewer/0.1 (+https://github.com/dabearic/trackcam-viewer)"
+_HTTP_USER_AGENT = "TrailCam-Viewer/0.1 (+https://github.com/dabearic/trackcam-viewer)"
 _GBIF_CACHE: dict[str, dict] = {}
+_INAT_CACHE: dict[str, dict] = {}
+
+
+@app.get("/api/species-autocomplete")
+def species_autocomplete(q: str = Query(..., min_length=1, description="Partial common or scientific name")):
+    """Autocomplete species names via iNaturalist.
+
+    iNat's autocomplete handles vernacular and scientific names equally well
+    and is the missing piece for "type 'bobc' and pick from a dropdown" UX —
+    GBIF's match endpoint can't do prefix matching on common names. The
+    response is normalised to a small shape the frontend can render directly:
+    common name + scientific name + iconic taxon (Mammalia/Aves/etc.) + id.
+    For the full named taxonomy, the frontend follows up with a GBIF lookup
+    on the chosen scientific name.
+    """
+    key = q.strip().lower()
+    if not key:
+        raise HTTPException(status_code=400, detail="q is required")
+    if key in _INAT_CACHE:
+        return _INAT_CACHE[key]
+
+    url = "https://api.inaturalist.org/v1/taxa/autocomplete?" + urllib.parse.urlencode({
+        "q":        q.strip(),
+        "rank":     "species",
+        "per_page": 8,
+    })
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _HTTP_USER_AGENT})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = json.loads(resp.read())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"iNaturalist autocomplete failed: {exc}")
+
+    out = {
+        "results": [
+            {
+                "id":          r.get("id"),
+                "name":        r.get("name", ""),                          # scientific
+                "common_name": r.get("preferred_common_name", "") or "",
+                "rank":        r.get("rank", ""),
+                "iconic":      r.get("iconic_taxon_name", ""),
+                "extinct":     bool(r.get("extinct")),
+            }
+            for r in raw.get("results", [])
+            if r.get("rank") == "species" and r.get("name")
+        ],
+    }
+    _INAT_CACHE[key] = out
+    return out
 
 
 @app.get("/api/species-lookup")
@@ -602,7 +651,7 @@ def species_lookup(name: str = Query(..., min_length=1, description="Scientific 
         "strict": "false",
     })
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": _GBIF_USER_AGENT})
+        req = urllib.request.Request(url, headers={"User-Agent": _HTTP_USER_AGENT})
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = json.loads(resp.read())
     except Exception as exc:
