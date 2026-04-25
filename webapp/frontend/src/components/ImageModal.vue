@@ -431,8 +431,14 @@ function categoryColor(cat) {
 const NON_SPECIES = new Set(['blank', 'human', 'vehicle'])
 
 function detectionLabel(det) {
-  // For animal detections, show the image's species prediction when it's
-  // an actual species (not a blank/human/vehicle classifier fallback).
+  // Manual edits store the species directly on the detection — prefer that
+  // over the image-level prediction fallback below. Without this, the bbox
+  // label silently ignored every manual edit because it kept rendering the
+  // image-level inference output.
+  if (det.manual && det.label) return capitalize(det.label)
+  // Inference detections only carry a generic class label ("animal"), so
+  // for animal-category detections we surface the image's species
+  // prediction instead. Skipped for blank/human/vehicle predictions.
   if (det.category === '1') {
     const name = props.image.prediction?.common_name
     if (name && !NON_SPECIES.has(name.toLowerCase())) {
@@ -554,6 +560,11 @@ async function onEditorSave(payload) {
       props.image.detections = (props.image.detections ?? []).map(
         d => byId.get(d.id) || d,
       )
+      // Backend rewrites image-level prediction when the bulk includes a
+      // species label. Apply it locally so the side-panel "Prediction"
+      // section, the gallery filter dropdown, and SpeciesView all see the
+      // change without a reload.
+      if (data.prediction) props.image.prediction = data.prediction
       emit('detections-changed', props.image)
     } else {
       const det = editingDet.value
