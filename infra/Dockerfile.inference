@@ -3,11 +3,12 @@
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 # Install Python 3.11
+# `git` is intentionally omitted — nothing here pip-installs from git, and
+# dropping it shaves ~60 MB off the apt layer.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3.11 \
         python3.11-venv \
         python3-pip \
-        git \
         libgl1 \
         libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
@@ -21,9 +22,28 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
         torch torchvision \
         --index-url https://download.pytorch.org/whl/cu124
 
-# Install SpeciesNet and GCP clients
+# Install SpeciesNet and GCP clients, then drop unused transitive deps.
+#
+# `yolov5` pulls a large training / multi-cloud / visualization tail via
+# its PyPI requires_dist. SpeciesNet's detector only imports
+# `yolov5.utils.augmentations` and `yolov5.utils.general`, so the
+# packages below are not exercised on the run_model inference path:
+#
+#   tensorboard  — yolov5 training logs         (~200 MB, biggest single hit)
+#   ultralytics  — yolov5's modern sibling      (~80 MB)
+#   boto3        — yolov5 S3 loader (we use GCS)(~60 MB)
+#   roboflow     — yolov5 integration           (~20 MB)
+#
+# Widening this list later is straightforward; start conservative so any
+# surprise lazy-import failure is easy to attribute.
 COPY requirements.txt ./
-RUN python -m pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt \
+    && python -m pip uninstall -y \
+        tensorboard ultralytics boto3 roboflow \
+    && SITE=$(python -c "import site,sys; print(site.getsitepackages()[0])") \
+    && find "$SITE" -type d -name '__pycache__' -prune -exec rm -rf {} + \
+    && find "$SITE" -type d -name 'tests' -prune -exec rm -rf {} + \
+    && find "$SITE" -name '*.pyc' -delete
 
 COPY job.py ./
 
