@@ -5,6 +5,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import urllib.parse
+import urllib.request
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -54,7 +56,7 @@ _TQDM_RE = re.compile(r'^(.+?)\s*:\s*(\d+)%\|[^|]*\|\s*(\d+)/(\d+)')
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, conlist, confloat
 import uvicorn
 
 app = FastAPI(title="TrailCam Viewer API")
@@ -62,6 +64,14 @@ app = FastAPI(title="TrailCam Viewer API")
 PREDICTIONS_FILE = os.environ.get(
     "PREDICTIONS_FILE",
     r"C:\Users\dabea\Downloads\Photos-3-001\predictions.json",
+)
+
+# Sibling file holding user-added species (taxonomy entries that don't appear
+# in any inference output yet). Loaded by /api/species-custom and merged into
+# the frontend species tree.
+SPECIES_CUSTOM_FILE = os.environ.get(
+    "SPECIES_CUSTOM_FILE",
+    str(Path(PREDICTIONS_FILE).parent / "species_custom.json"),
 )
 
 # Python interpreter used to invoke SpeciesNet.
@@ -118,9 +128,103 @@ def parse_label(label_str: str) -> dict:
     }
 
 
-def load_predictions() -> list:
+# ---------------------------------------------------------------------------
+# Detection schema + raw predictions.json helpers
+# ---------------------------------------------------------------------------
+
+VALID_CATEGORIES = {"1", "2", "3"}
+
+
+class DetectionCreate(BaseModel):
+    """Schema for adding a manual detection to an image."""
+    category: str = Field(..., description="'1' animal, '2' human, '3' vehicle")
+    label: str
+    bbox: conlist(confloat(ge=0.0, le=1.0), min_length=4, max_length=4)
+    conf: confloat(ge=0.0, le=1.0) = 1.0
+    scientific: Optional[str] = None
+
+    def model_post_init(self, __context) -> None:
+        if self.category not in VALID_CATEGORIES:
+            raise ValueError(f"category must be one of {sorted(VALID_CATEGORIES)}")
+
+
+class DetectionPatch(BaseModel):
+    """Partial update — any field may be omitted to leave it unchanged."""
+    category: Optional[str] = None
+    label: Optional[str] = None
+    conf: Optional[confloat(ge=0.0, le=1.0)] = None
+    scientific: Optional[str] = None
+
+    def model_post_init(self, __context) -> None:
+        if self.category is not None and self.category not in VALID_CATEGORIES:
+            raise ValueError(f"category must be one of {sorted(VALID_CATEGORIES)}")
+
+
+class DetectionBulkPatch(BaseModel):
+    """Apply the same partial update to every detection on an image that
+    matches `category_filter`. If `category_filter` is None, every detection
+    is updated. Useful for re-labelling a flock of birds in one click."""
+    category_filter: Optional[str] = None
+    category:        Optional[str] = None
+    label:           Optional[str] = None
+    conf:            Optional[confloat(ge=0.0, le=1.0)] = None
+    scientific:      Optional[str] = None
+
+    def model_post_init(self, __context) -> None:
+        for fld, val in (("category", self.category), ("category_filter", self.category_filter)):
+            if val is not None and val not in VALID_CATEGORIES:
+                raise ValueError(f"{fld} must be one of {sorted(VALID_CATEGORIES)}")
+
+
+def _load_raw_predictions() -> dict:
+    """Read predictions.json and backfill missing detection IDs in place.
+
+    If any IDs were added, the file is rewritten so IDs are stable across
+    sessions. Returns the parsed dict (with `predictions` key).
+    """
+    if not os.path.isfile(PREDICTIONS_FILE):
+        return {"predictions": []}
     with open(PREDICTIONS_FILE, encoding="utf-8") as f:
         data = json.load(f)
+
+    mutated = False
+    for pred in data.get("predictions", []):
+        for det in pred.get("detections", []) or []:
+            if "id" not in det:
+                det["id"] = uuid.uuid4().hex
+                mutated = True
+
+    if mutated:
+        _save_raw_predictions(data)
+    return data
+
+
+def _save_raw_predictions(data: dict) -> None:
+    """Atomic write to PREDICTIONS_FILE via temp file + os.replace."""
+    target_dir = os.path.dirname(PREDICTIONS_FILE) or "."
+    fd, tmp = tempfile.mkstemp(suffix=".json", dir=target_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=1)
+        os.replace(tmp, PREDICTIONS_FILE)
+    except Exception:
+        if os.path.isfile(tmp):
+            try: os.unlink(tmp)
+            except OSError: pass
+        raise
+
+
+def _find_prediction(data: dict, path: str) -> Optional[dict]:
+    """Locate a prediction entry by filepath (normalised compare)."""
+    target = _norm_path(path)
+    for p in data.get("predictions", []):
+        if _norm_path(p.get("filepath", "")) == target:
+            return p
+    return None
+
+
+def load_predictions() -> list:
+    data = _load_raw_predictions()
 
     result = []
     for pred in data["predictions"]:
@@ -378,6 +482,364 @@ def delete_prediction(path: str = Query(..., description="Filepath of the image 
             pass
 
     return {"deleted": True, "path": path, "removed_entries": len(removed)}
+
+
+# ---------------------------------------------------------------------------
+# API routes — per-detection edits
+# ---------------------------------------------------------------------------
+#
+# Detections are addressed by the parent image's filepath plus the detection's
+# stable UUID `id` (backfilled by _load_raw_predictions on first read). Every
+# mutation reads the raw file, edits one detection, and atomically rewrites the
+# whole file via _save_raw_predictions. Single-user assumption — see issue #13
+# for concurrent-edit considerations.
+
+def _require_detection(path: str, det_id: str) -> tuple[dict, dict, dict]:
+    """Load raw data + locate prediction + locate detection. 404 on miss."""
+    data = _load_raw_predictions()
+    pred = _find_prediction(data, path)
+    if pred is None:
+        raise HTTPException(status_code=404, detail="No prediction for that path")
+    for det in pred.get("detections", []) or []:
+        if det.get("id") == det_id:
+            return data, pred, det
+    raise HTTPException(status_code=404, detail="Detection not found")
+
+
+@app.delete("/api/predictions/detections")
+def delete_detection(
+    path: str = Query(..., description="Image filepath"),
+    id:   str = Query(..., description="Detection id"),
+):
+    data, pred, _ = _require_detection(path, id)
+    pred["detections"] = [d for d in pred["detections"] if d.get("id") != id]
+    _save_raw_predictions(data)
+    return {"deleted": True, "id": id}
+
+
+@app.patch("/api/predictions/detections")
+def patch_detection(
+    patch: DetectionPatch,
+    path:  str = Query(...),
+    id:    str = Query(...),
+):
+    """Update category, label/species, and/or confidence on an existing
+    detection. Marks the detection as `manual: true` since a human touched it.
+    Bbox is intentionally not editable here — to move a box, delete + redraw."""
+    data, _pred, det = _require_detection(path, id)
+    if patch.category is not None: det["category"]   = patch.category
+    if patch.label    is not None: det["label"]      = patch.label
+    if patch.conf     is not None: det["conf"]       = float(patch.conf)
+    if patch.scientific is not None: det["scientific"] = patch.scientific
+    det["manual"] = True
+    _save_raw_predictions(data)
+    return {"updated": True, "detection": det}
+
+
+@app.patch("/api/predictions/detections/bulk")
+def patch_detections_bulk(
+    body: DetectionBulkPatch,
+    path: str = Query(..., description="Image filepath"),
+):
+    """Apply the same partial update to many detections at once. Each
+    matched detection is flipped to manual:true.
+
+    When the user gives the bulk a new species label, we ALSO rewrite the
+    image-level prediction. That's the field the gallery filter and the
+    SpeciesView tree are built from — without this propagation, a flock
+    bulk-relabelled to "American Robin" wouldn't appear under "American
+    Robin" anywhere outside the modal. Best-effort GBIF lookup synthesises
+    a SpeciesNet-style raw label so SpeciesView places the species under
+    its real taxonomic branch instead of "unknown"."""
+    data = _load_raw_predictions()
+    pred = _find_prediction(data, path)
+    if pred is None:
+        raise HTTPException(status_code=404, detail="No prediction for that path")
+    updated: list[dict] = []
+    for det in (pred.get("detections") or []):
+        if body.category_filter and det.get("category") != body.category_filter:
+            continue
+        if body.category   is not None: det["category"]   = body.category
+        if body.label      is not None: det["label"]      = body.label
+        if body.conf       is not None: det["conf"]       = float(body.conf)
+        if body.scientific is not None: det["scientific"] = body.scientific
+        det["manual"] = True
+        updated.append(det)
+
+    new_prediction: Optional[dict] = None
+    if updated and body.label:
+        new_prediction = _build_synthetic_prediction(body.label, body.scientific or "")
+        # predictions.json stores `prediction` as a raw SpeciesNet-style
+        # string; load_predictions parses it on read.
+        pred["prediction"] = new_prediction["raw"]
+        pred["prediction_source"] = "manual"
+
+    if updated:
+        _save_raw_predictions(data)
+
+    response: dict = {"updated": len(updated), "detections": updated}
+    if new_prediction is not None:
+        response["prediction"] = new_prediction
+    return response
+
+
+@app.post("/api/predictions/detections", status_code=201)
+def add_detection(
+    body: DetectionCreate,
+    path: str = Query(..., description="Image filepath"),
+):
+    """Create a new manual detection on an image. Server assigns the id and
+    sets `manual: true`."""
+    data = _load_raw_predictions()
+    pred = _find_prediction(data, path)
+    if pred is None:
+        raise HTTPException(status_code=404, detail="No prediction for that path")
+    det = {
+        "id":       uuid.uuid4().hex,
+        "category": body.category,
+        "label":    body.label,
+        "bbox":     list(body.bbox),
+        "conf":     float(body.conf),
+        "manual":   True,
+    }
+    if body.scientific:
+        det["scientific"] = body.scientific
+    pred.setdefault("detections", []).append(det)
+    _save_raw_predictions(data)
+    return {"created": True, "detection": det}
+
+
+# ---------------------------------------------------------------------------
+# API routes — custom (user-added) species
+# ---------------------------------------------------------------------------
+
+class CustomSpecies(BaseModel):
+    common_name: str
+    scientific:  Optional[str] = None
+    parent:      Optional[str] = None  # optional taxonomy hint, e.g. "mammalia;carnivora;felidae"
+
+
+def _load_custom_species() -> list:
+    if not os.path.isfile(SPECIES_CUSTOM_FILE):
+        return []
+    try:
+        with open(SPECIES_CUSTOM_FILE, encoding="utf-8") as f:
+            return json.load(f).get("species", [])
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_custom_species(species: list) -> None:
+    target_dir = os.path.dirname(SPECIES_CUSTOM_FILE) or "."
+    fd, tmp = tempfile.mkstemp(suffix=".json", dir=target_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"species": species}, f, indent=1)
+        os.replace(tmp, SPECIES_CUSTOM_FILE)
+    except Exception:
+        if os.path.isfile(tmp):
+            try: os.unlink(tmp)
+            except OSError: pass
+        raise
+
+
+# GBIF taxonomy lookup — proxy + tiny in-process cache so the picker can
+# autofill higher-order taxa (class/order/family) when the user adds a new
+# species. GBIF's match endpoint is free and unauthenticated; the proxy
+# also keeps the GBIF URL out of the browser (CORS / future swap).
+_HTTP_USER_AGENT = "TrailCam-Viewer/0.1 (+https://github.com/dabearic/trackcam-viewer)"
+_GBIF_CACHE: dict[str, dict] = {}
+_INAT_CACHE: dict[str, dict] = {}
+
+
+def _lookup_taxonomy_silent(name: str) -> Optional[dict]:
+    """Same as species_lookup but returns None on any failure — used by
+    the bulk endpoint where a missing taxonomy shouldn't fail the whole
+    edit. Shares the _GBIF_CACHE with species_lookup so a successful
+    lookup either side is reused."""
+    if not name or not name.strip():
+        return None
+    key = name.strip().lower()
+    if key in _GBIF_CACHE:
+        return _GBIF_CACHE[key]
+    try:
+        url = "https://api.gbif.org/v1/species/match?" + urllib.parse.urlencode({
+            "name": name.strip(), "strict": "false",
+        })
+        req = urllib.request.Request(url, headers={"User-Agent": _HTTP_USER_AGENT})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            raw = json.loads(resp.read())
+    except Exception:
+        return None
+    if raw.get("matchType") == "NONE":
+        return None
+    result = {
+        "kingdom":    raw.get("kingdom", ""),
+        "phylum":     raw.get("phylum", ""),
+        "class":      raw.get("class", ""),
+        "order":      raw.get("order", ""),
+        "family":     raw.get("family", ""),
+        "genus":      raw.get("genus", ""),
+        "species":    raw.get("species", ""),
+        "scientific": raw.get("scientificName") or raw.get("canonicalName") or "",
+        "rank":       raw.get("rank", ""),
+        "match_type": raw.get("matchType", ""),
+        "confidence": raw.get("confidence", 0),
+    }
+    _GBIF_CACHE[key] = result
+    return result
+
+
+def _build_synthetic_prediction(common_name: str, scientific: str = "") -> dict:
+    """Synthesise a parsed-prediction dict for a manual species edit.
+
+    'raw' mirrors SpeciesNet's 7-field label format
+    ('uuid;class;order;family;genus;species_epithet;common_name') so
+    SpeciesView's tree can place the species under its real taxonomic
+    branch. Best-effort GBIF lookup — if it fails, we still return a
+    valid (but flat) prediction so the bulk save itself doesn't error.
+    """
+    tax = _lookup_taxonomy_silent(scientific or common_name) or {}
+    species_full = tax.get("species") or ""
+    genus = tax.get("genus") or ""
+    if species_full and genus and species_full.lower().startswith(genus.lower()):
+        epithet = species_full[len(genus):].strip()
+    elif species_full:
+        # Fall back to the trailing word of "Genus species" / "Genus species subsp."
+        epithet = species_full.split()[-1]
+    else:
+        epithet = ""
+    raw = ";".join([
+        "",
+        (tax.get("class")  or "").lower(),
+        (tax.get("order")  or "").lower(),
+        (tax.get("family") or "").lower(),
+        (tax.get("genus")  or "").lower(),
+        epithet.lower(),
+        common_name,
+    ])
+    return {
+        "id":          "",
+        "common_name": common_name,
+        "scientific":  tax.get("scientific") or scientific or "",
+        "raw":         raw,
+    }
+
+
+@app.get("/api/species-autocomplete")
+def species_autocomplete(q: str = Query(..., min_length=1, description="Partial common or scientific name")):
+    """Autocomplete species names via iNaturalist.
+
+    iNat's autocomplete handles vernacular and scientific names equally well
+    and is the missing piece for "type 'bobc' and pick from a dropdown" UX —
+    GBIF's match endpoint can't do prefix matching on common names. The
+    response is normalised to a small shape the frontend can render directly:
+    common name + scientific name + iconic taxon (Mammalia/Aves/etc.) + id.
+    For the full named taxonomy, the frontend follows up with a GBIF lookup
+    on the chosen scientific name.
+    """
+    key = q.strip().lower()
+    if not key:
+        raise HTTPException(status_code=400, detail="q is required")
+    if key in _INAT_CACHE:
+        return _INAT_CACHE[key]
+
+    url = "https://api.inaturalist.org/v1/taxa/autocomplete?" + urllib.parse.urlencode({
+        "q":        q.strip(),
+        "rank":     "species",
+        "per_page": 8,
+    })
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _HTTP_USER_AGENT})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = json.loads(resp.read())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"iNaturalist autocomplete failed: {exc}")
+
+    out = {
+        "results": [
+            {
+                "id":          r.get("id"),
+                "name":        r.get("name", ""),                          # scientific
+                "common_name": r.get("preferred_common_name", "") or "",
+                "rank":        r.get("rank", ""),
+                "iconic":      r.get("iconic_taxon_name", ""),
+                "extinct":     bool(r.get("extinct")),
+            }
+            for r in raw.get("results", [])
+            if r.get("rank") == "species" and r.get("name")
+        ],
+    }
+    _INAT_CACHE[key] = out
+    return out
+
+
+@app.get("/api/species-lookup")
+def species_lookup(name: str = Query(..., min_length=1, description="Scientific or common name")):
+    """Resolve a species name to its full taxonomy via GBIF's match endpoint."""
+    key = name.strip().lower()
+    if not key:
+        raise HTTPException(status_code=400, detail="name is required")
+    if key in _GBIF_CACHE:
+        return _GBIF_CACHE[key]
+
+    url = "https://api.gbif.org/v1/species/match?" + urllib.parse.urlencode({
+        "name":   name.strip(),
+        "strict": "false",
+    })
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _HTTP_USER_AGENT})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = json.loads(resp.read())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"GBIF lookup failed: {exc}")
+
+    if raw.get("matchType") == "NONE":
+        raise HTTPException(status_code=404, detail=f"No match for '{name}'")
+
+    result = {
+        "kingdom":    raw.get("kingdom", ""),
+        "phylum":     raw.get("phylum", ""),
+        # `class` is a Python keyword — GBIF returns it under that name, so we
+        # surface it as `class_` here and rename in the JSON response below.
+        "class_":     raw.get("class", ""),
+        "order":      raw.get("order", ""),
+        "family":     raw.get("family", ""),
+        "genus":      raw.get("genus", ""),
+        "species":    raw.get("species", ""),
+        "scientific": raw.get("scientificName") or raw.get("canonicalName") or "",
+        "rank":       raw.get("rank", ""),
+        "match_type": raw.get("matchType", ""),
+        "confidence": raw.get("confidence", 0),
+    }
+    # Rename for the wire format
+    result["class"] = result.pop("class_")
+    _GBIF_CACHE[key] = result
+    return result
+
+
+@app.get("/api/species-custom")
+def get_custom_species():
+    return {"species": _load_custom_species()}
+
+
+@app.post("/api/species-custom", status_code=201)
+def add_custom_species(body: CustomSpecies):
+    species = _load_custom_species()
+    # De-dup by common_name (case-insensitive). If it already exists, return it.
+    key = body.common_name.strip().lower()
+    for s in species:
+        if s.get("common_name", "").strip().lower() == key:
+            return {"created": False, "species": s}
+    entry = {
+        "id":          uuid.uuid4().hex,
+        "common_name": body.common_name.strip(),
+        "scientific":  (body.scientific or "").strip(),
+        "parent":      (body.parent or "").strip(),
+    }
+    species.append(entry)
+    _save_custom_species(species)
+    return {"created": True, "species": entry}
 
 
 # ---------------------------------------------------------------------------

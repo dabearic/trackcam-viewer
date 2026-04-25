@@ -1,5 +1,14 @@
 <template>
-  <div class="crop">
+  <div class="crop" :class="{ 'crop--editable': editable }">
+    <button
+      v-if="editable"
+      type="button"
+      class="crop__delete"
+      title="Delete this detection"
+      @click.stop="$emit('delete')"
+      @keydown.enter.stop.prevent="$emit('delete')"
+      @keydown.space.stop.prevent="$emit('delete')"
+    >✕</button>
     <img
       v-if="det.crop_gcs_path"
       :src="imageUrl(det.crop_gcs_path)"
@@ -22,7 +31,9 @@ const props = defineProps({
   det: Object,
   color: String,
   label: String,
+  editable: { type: Boolean, default: false },
 })
+defineEmits(['delete'])
 
 const canvasRef = ref(null)
 const TARGET_H = 110
@@ -55,12 +66,43 @@ watch(() => [props.imageSrc, props.det], draw)
 
 <style scoped>
 .crop {
+  position: relative;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   border-radius: 4px;
   overflow: hidden;
   border: 1px solid var(--border);
+}
+
+/* Quick-delete X — only visible while edit mode is on. Sits at the top-
+   right of the crop; click.stop on the button keeps the parent crop's
+   click handler (open-editor) from firing. */
+.crop__delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.5);
+  background: rgba(0,0,0,0.65);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0.7;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s;
+}
+.crop__delete:hover {
+  opacity: 1;
+  background: #b91c1c;
+  border-color: #fca5a5;
 }
 
 .crop__canvas,
