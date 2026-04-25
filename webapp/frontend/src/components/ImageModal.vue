@@ -160,17 +160,22 @@
         <div v-if="significantDetections.length" class="modal__carousel">
           <DetectionCrop
             v-for="(det, i) in significantDetections"
-            :key="i"
+            :key="det.id || i"
             :image-src="imageUrl(image.filepath)"
             :det="det"
             :color="categoryColor(det.category)"
             :label="detectionLabel(det)"
-            :class="{ 'crop--active': zoomedDetIndex === i }"
+            :editable="editMode"
+            :class="{
+              'crop--active':  zoomedDetIndex === i,
+              'crop--editing': editingDet && det.id === editingDet.id,
+            }"
             role="button"
             tabindex="0"
             @click="onCropClick(i, det)"
             @keydown.enter.prevent="onCropClick(i, det)"
             @keydown.space.prevent="onCropClick(i, det)"
+            @delete="quickDeleteDetection(det)"
           />
         </div>
         </div><!-- end .modal__left -->
@@ -363,9 +368,14 @@ const containerStyle = computed(() => {
 
 const currentIndex = computed(() => props.allImages.indexOf(props.image))
 
-const significantDetections = computed(() =>
-  (props.image.detections ?? []).filter(d => d.conf >= 0.1)
-)
+// "Significant" detections — what we render as bboxes, crops, and side-
+// panel rows. In view mode we hide noise below 10% confidence; in edit
+// mode we surface every detection so "Apply to all 13" doesn't disagree
+// with what the user can actually see and click on.
+const significantDetections = computed(() => {
+  const all = props.image.detections ?? []
+  return editMode.value ? all : all.filter(d => d.conf >= 0.1)
+})
 
 // How many detections share the open editor's category — used for the
 // editor's "Apply to all N animal detections" checkbox. Counts every
@@ -755,14 +765,48 @@ function zoomToDetection(det) {
 }
 
 function onCropClick(i, det) {
-  // Toggle: clicking the currently-auto-zoomed crop resets; clicking any
-  // other crop jumps to it.
+  // In edit mode, clicking a crop selects that detection for editing
+  // (and zooms the image to it so you can actually see what you're
+  // editing while the dock takes up the left panel). View mode keeps
+  // its existing toggle: zoom-to-fit / reset.
+  if (editMode.value) {
+    openEditorForDet(det)
+    zoomToDetection(det)
+    zoomedDetIndex.value = i
+    return
+  }
   if (zoomedDetIndex.value === i && zoom.value > 1) {
     resetZoom()
     return
   }
   zoomToDetection(det)
   zoomedDetIndex.value = i
+}
+
+/** Quick-delete from the crop carousel. Mirrors the editor's Delete
+ *  button — no confirm, since the user has to be in edit mode and
+ *  explicitly click the X overlay. */
+async function quickDeleteDetection(det) {
+  if (!det || !det.id) return
+  try {
+    const res = await apiFetch(
+      `/api/predictions/detections?path=${encodeURIComponent(props.image.filepath)}&id=${encodeURIComponent(det.id)}`,
+      { method: 'DELETE' },
+    )
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    // If the editor was open on this detection, close it before the
+    // detection vanishes from local state.
+    if (editingDet.value && editingDet.value.id === det.id) closeEditor()
+    props.image.detections = (props.image.detections ?? []).filter(d => d.id !== det.id)
+    emit('detections-changed', props.image)
+  } catch (e) {
+    // Surface the error so the user knows the click had no effect; the
+    // editor's Delete path uses an inline error, but the carousel has no
+    // dedicated error slot, so a console + alert combo is the cheapest
+    // visible signal until we add a toast layer.
+    console.error('Detection delete failed:', e)
+    alert(`Delete failed: ${e.message}`)
+  }
 }
 
 function clampPan() {
@@ -1121,6 +1165,9 @@ watch(() => props.image, () => {
 }
 .modal__carousel > .crop--active {
   box-shadow: 0 0 0 2px var(--accent, #60a5fa);
+}
+.modal__carousel > .crop--editing {
+  box-shadow: 0 0 0 2px #fbbf24;
 }
 
 .modal__image-wrap {
