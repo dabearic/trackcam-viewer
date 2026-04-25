@@ -5,6 +5,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import urllib.parse
+import urllib.request
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -576,6 +578,58 @@ def _save_custom_species(species: list) -> None:
             try: os.unlink(tmp)
             except OSError: pass
         raise
+
+
+# GBIF taxonomy lookup — proxy + tiny in-process cache so the picker can
+# autofill higher-order taxa (class/order/family) when the user adds a new
+# species. GBIF's match endpoint is free and unauthenticated; the proxy
+# also keeps the GBIF URL out of the browser (CORS / future swap).
+_GBIF_USER_AGENT = "TrailCam-Viewer/0.1 (+https://github.com/dabearic/trackcam-viewer)"
+_GBIF_CACHE: dict[str, dict] = {}
+
+
+@app.get("/api/species-lookup")
+def species_lookup(name: str = Query(..., min_length=1, description="Scientific or common name")):
+    """Resolve a species name to its full taxonomy via GBIF's match endpoint."""
+    key = name.strip().lower()
+    if not key:
+        raise HTTPException(status_code=400, detail="name is required")
+    if key in _GBIF_CACHE:
+        return _GBIF_CACHE[key]
+
+    url = "https://api.gbif.org/v1/species/match?" + urllib.parse.urlencode({
+        "name":   name.strip(),
+        "strict": "false",
+    })
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _GBIF_USER_AGENT})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = json.loads(resp.read())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"GBIF lookup failed: {exc}")
+
+    if raw.get("matchType") == "NONE":
+        raise HTTPException(status_code=404, detail=f"No match for '{name}'")
+
+    result = {
+        "kingdom":    raw.get("kingdom", ""),
+        "phylum":     raw.get("phylum", ""),
+        # `class` is a Python keyword — GBIF returns it under that name, so we
+        # surface it as `class_` here and rename in the JSON response below.
+        "class_":     raw.get("class", ""),
+        "order":      raw.get("order", ""),
+        "family":     raw.get("family", ""),
+        "genus":      raw.get("genus", ""),
+        "species":    raw.get("species", ""),
+        "scientific": raw.get("scientificName") or raw.get("canonicalName") or "",
+        "rank":       raw.get("rank", ""),
+        "match_type": raw.get("matchType", ""),
+        "confidence": raw.get("confidence", 0),
+    }
+    # Rename for the wire format
+    result["class"] = result.pop("class_")
+    _GBIF_CACHE[key] = result
+    return result
 
 
 @app.get("/api/species-custom")
