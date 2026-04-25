@@ -65,6 +65,7 @@
           :top-five="topFiveFor(image)"
           :flat-species="flatSpecies"
           :add-custom="addCustom"
+          :similar-count="similarCount"
           :busy="editorBusy"
           :error="editorError"
           @save="onEditorSave"
@@ -366,6 +367,15 @@ const significantDetections = computed(() =>
   (props.image.detections ?? []).filter(d => d.conf >= 0.1)
 )
 
+// How many detections share the open editor's category — used for the
+// editor's "Apply to all N animal detections" checkbox. Counts every
+// detection (including low-conf ones) since the bulk endpoint does too.
+const similarCount = computed(() => {
+  if (!editingDet.value || editorMode.value === 'add') return 0
+  const cat = editingDet.value.category
+  return (props.image?.detections ?? []).filter(d => d.category === cat).length
+})
+
 // ── EXIF tags ─────────────────────────────────────────────────────────────────
 const exifTags    = ref(null)
 const exifLoading = ref(false)
@@ -518,6 +528,32 @@ async function onEditorSave(payload) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       props.image.detections = [...(props.image.detections ?? []), data.detection]
+      emit('detections-changed', props.image)
+    } else if (payload.applyToAll) {
+      // Bulk: apply this edit to every detection sharing the edited
+      // detection's category. Backend returns the full updated detections;
+      // splice each back into local state by id so reactivity sees the change.
+      const filterCat = editingDet.value.category
+      const res = await apiFetch(
+        `/api/predictions/detections/bulk?path=${encodeURIComponent(props.image.filepath)}`,
+        {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            category_filter: filterCat,
+            category:        payload.category,
+            label:           payload.label,
+            scientific:      payload.scientific || undefined,
+            conf:            payload.conf,
+          }),
+        },
+      )
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      const byId = new Map(data.detections.map(d => [d.id, d]))
+      props.image.detections = (props.image.detections ?? []).map(
+        d => byId.get(d.id) || d,
+      )
       emit('detections-changed', props.image)
     } else {
       const det = editingDet.value

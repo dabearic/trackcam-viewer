@@ -56,6 +56,17 @@
       />
     </div>
 
+    <!-- Bulk apply: only meaningful when there's more than one detection of
+         the same category to update, and only in edit mode. The flock-of-
+         birds use case: change one detection's species, propagate to all. -->
+    <label
+      v-if="mode === 'edit' && similarCount > 1"
+      class="det-editor__checkbox"
+    >
+      <input type="checkbox" v-model="applyToAll" />
+      Apply to all {{ similarCount }} {{ categoryNoun }} detection{{ similarCount === 1 ? '' : 's' }}
+    </label>
+
     <p v-if="error" class="det-editor__error">{{ error }}</p>
 
     <!-- Actions -->
@@ -102,6 +113,9 @@ const props = defineProps({
   addCustom:  { type: Function, required: true },
   busy:       { type: Boolean, default: false },
   error:      { type: String, default: '' },
+  // Number of detections on this image with the same category as the one
+  // being edited — used to label the "apply to all" checkbox. 0/1 hides it.
+  similarCount: { type: Number, default: 0 },
 })
 const emit = defineEmits(['save', 'delete', 'close'])
 
@@ -110,6 +124,7 @@ const category   = ref('1')
 const label      = ref('')
 const scientific = ref('')
 const conf       = ref(1.0)
+const applyToAll = ref(false)
 
 function reset() {
   if (props.detection) {
@@ -125,9 +140,13 @@ function reset() {
     scientific.value = ''
     conf.value       = 1.0
   }
+  applyToAll.value = false
 }
 watch(() => props.detection, reset, { immediate: true })
 watch(() => props.mode,      reset)
+
+const CATEGORY_NOUN = { '1': 'animal', '2': 'human', '3': 'vehicle' }
+const categoryNoun = computed(() => CATEGORY_NOUN[category.value] || 'matching')
 
 // Auto-set label for human/vehicle so the user doesn't have to pick a species.
 watch(category, c => {
@@ -151,6 +170,7 @@ function onSave() {
     label:      label.value,
     scientific: scientific.value,
     conf:       Number(conf.value),
+    applyToAll: applyToAll.value,
   })
 }
 
@@ -274,6 +294,21 @@ function onSave() {
   font-size: 12px;
   color: #f87171;
 }
+
+.det-editor__checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.det-editor__checkbox:hover { border-color: var(--accent, #2d7d46); }
+.det-editor__checkbox input { accent-color: var(--accent, #2d7d46); }
 
 .det-editor__actions {
   display: flex;
