@@ -160,21 +160,22 @@ function onSave() {
 }
 
 // ── Positioning ─────────────────────────────────────────────────────────────
+// Anchor.x and anchor.y are viewport coords (the editor renders position:fixed
+// via a <Teleport> in the parent). Caller has already clamped them to keep
+// the editor inside the viewport, so we just translate them straight to CSS.
 const positionStyle = computed(() => {
   const a = props.anchor
   if (!a) return null
-  // Default to placing the popover to the right of the anchor; caller can
-  // pass side:'left' to flip when there's not enough room.
-  const side = a.side || 'right'
-  return side === 'left'
-    ? { right: `${a.x}px`, top:  `${a.y}px` }
-    : { left:  `${a.x}px`, top:  `${a.y}px` }
+  return { left: `${a.x}px`, top: `${a.y}px` }
 })
 </script>
 
 <style scoped>
 .det-editor {
-  position: absolute;
+  /* position: fixed so the editor floats above the modal/wrap rather than
+     getting clipped by .modal__image-wrap's overflow:hidden. Rendered into
+     <body> via <Teleport> in ImageModal so its stacking context is clean. */
+  position: fixed;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -183,10 +184,13 @@ const positionStyle = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  z-index: 20;
+  z-index: 250;
   width: 304px;
-  max-height: calc(100vh - 120px);
-  overflow: visible;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  /* Internal scroll when the form is taller than the viewport — keeps the
+     Save/Cancel actions reachable on tiny windows. */
+  overflow-y: auto;
 }
 
 .det-editor__header {
