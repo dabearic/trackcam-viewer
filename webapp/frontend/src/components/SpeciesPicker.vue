@@ -79,6 +79,29 @@
           <span>Scientific (optional)</span>
           <input v-model="newScientific" type="text" placeholder="e.g. Lynx rufus" />
         </label>
+
+        <!-- GBIF autofill -->
+        <div class="species-picker__lookup">
+          <button
+            type="button"
+            class="species-picker__btn species-picker__btn--ghost"
+            :disabled="looking || !lookupQuery"
+            @click="lookupTaxonomy"
+            :title="lookupQuery ? `Look up '${lookupQuery}' on GBIF` : 'Type a name first'"
+          >{{ looking ? 'Looking up…' : 'Autofill from GBIF' }}</button>
+          <span v-if="lookupResult" class="species-picker__lookup-meta">
+            {{ lookupResult.match_type === 'EXACT' ? 'exact' : 'fuzzy' }}
+            · {{ lookupResult.confidence }}%
+          </span>
+        </div>
+        <div v-if="lookupResult" class="species-picker__taxonomy">
+          <span v-for="rank in resolvedRanks" :key="rank.label" class="species-picker__taxon">
+            <span class="species-picker__taxon-label">{{ rank.label }}</span>
+            <span class="species-picker__taxon-value">{{ rank.value }}</span>
+          </span>
+        </div>
+        <p v-if="lookupError" class="species-picker__error">{{ lookupError }}</p>
+
         <p v-if="addError" class="species-picker__error">{{ addError }}</p>
         <div class="species-picker__add-actions">
           <button type="button" class="species-picker__btn" :disabled="adding" @click="cancelAdd">Cancel</button>
@@ -94,6 +117,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import SpeciesTreeNode from './SpeciesTreeNode.vue'
+import { apiFetch } from '../firebase.js'
 
 const props = defineProps({
   // From useSpeciesCatalog
@@ -115,6 +139,64 @@ const newScientific = ref('')
 const adding    = ref(false)
 const addError  = ref('')
 
+// ── GBIF taxonomy autofill ──────────────────────────────────────────────────
+const looking      = ref(false)
+const lookupResult = ref(null)   // full GBIF response, or null
+const lookupError  = ref('')
+
+// Prefer the scientific-name field when present (GBIF's match endpoint is
+// scientific-name-first); fall back to the common name so the user can at
+// least try with whatever they have.
+const lookupQuery = computed(
+  () => (newScientific.value.trim() || newCommon.value.trim()),
+)
+
+// Just the four ranks above genus — what we display as a preview. Empty
+// values are filtered so a sparse GBIF response doesn't render placeholder rows.
+const resolvedRanks = computed(() => {
+  const r = lookupResult.value
+  if (!r) return []
+  return [
+    { label: 'Kingdom', value: r.kingdom },
+    { label: 'Phylum',  value: r.phylum  },
+    { label: 'Class',   value: r.class   },
+    { label: 'Order',   value: r.order   },
+    { label: 'Family',  value: r.family  },
+    { label: 'Genus',   value: r.genus   },
+  ].filter(x => x.value)
+})
+
+async function lookupTaxonomy() {
+  const q = lookupQuery.value
+  if (!q) return
+  looking.value = true
+  lookupError.value = ''
+  try {
+    const res = await apiFetch(`/api/species-lookup?name=${encodeURIComponent(q)}`)
+    if (res.status === 404) throw new Error(`No GBIF match for '${q}'`)
+    if (!res.ok) throw new Error(`Lookup failed (HTTP ${res.status})`)
+    const data = await res.json()
+    lookupResult.value = data
+    // Autofill the scientific-name field if the user left it blank, so the
+    // saved custom species carries the resolved name forward.
+    if (!newScientific.value.trim() && data.scientific) {
+      newScientific.value = data.scientific
+    }
+  } catch (e) {
+    lookupResult.value = null
+    lookupError.value = e.message
+  } finally {
+    looking.value = false
+  }
+}
+
+// Re-typing should invalidate the cached lookup — otherwise the preview
+// would lie about what's about to be saved.
+watch([newCommon, newScientific], () => {
+  lookupResult.value = null
+  lookupError.value = ''
+})
+
 const tierOne = computed(() => props.topFive)
 
 const filteredFlat = computed(() => {
@@ -133,6 +215,8 @@ function cancelAdd() {
   newCommon.value = ''
   newScientific.value = ''
   addError.value = ''
+  lookupResult.value = null
+  lookupError.value = ''
 }
 
 async function submitAdd() {
@@ -141,13 +225,23 @@ async function submitAdd() {
   adding.value = true
   addError.value = ''
   try {
+    // Build the parent path (class;order;family) from the GBIF lookup so
+    // the species lands in the right branch of the tree on save. Empty
+    // string when the user skipped the lookup or it failed — backend
+    // accepts that and the species shows up under "Other".
+    const r = lookupResult.value
+    const parent = r ? [r.class, r.order, r.family].map(s => s || '').join(';') : ''
+
     const sp = await props.addCustom({
       common_name: cn,
       scientific:  newScientific.value.trim(),
+      parent,
     })
     addOpen.value = false
     newCommon.value = ''
     newScientific.value = ''
+    lookupResult.value = null
+    lookupError.value = ''
     emit('select', { common_name: sp.common_name, scientific: sp.scientific })
   } catch (e) {
     addError.value = `Add failed: ${e.message}`
@@ -346,4 +440,50 @@ watch(() => props.selected, () => { addError.value = '' })
   color: white;
 }
 .species-picker__btn--primary:hover:not(:disabled) { background: #246d3a; }
+
+.species-picker__btn--ghost {
+  background: var(--surface);
+  color: var(--text-muted);
+}
+.species-picker__btn--ghost:hover:not(:disabled) { color: var(--text); }
+
+.species-picker__lookup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.species-picker__lookup-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.species-picker__taxonomy {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+}
+
+.species-picker__taxon {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.species-picker__taxon-label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 9px;
+}
+
+.species-picker__taxon-value {
+  color: var(--text);
+}
 </style>
