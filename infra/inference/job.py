@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from google.cloud import firestore, storage
-from PIL import Image
+from PIL import Image, ImageOps
 
 CROP_CONF_THRESHOLD = 0.2
 CROP_MAX_DIM        = 512
@@ -254,7 +254,12 @@ def main():
                     continue
                 if source_image is None:
                     try:
-                        source_image = Image.open(local_fp)
+                        # Apply EXIF orientation so portrait-mode photos crop
+                        # in the orientation the browser displays them in.
+                        # Without this, crops come out 90°/180° rotated for
+                        # any image whose camera embedded a non-default
+                        # Orientation tag (very common on trail cams).
+                        source_image = ImageOps.exif_transpose(Image.open(local_fp))
                     except Exception as exc:
                         log.append(f"crop: could not open {local_fp}: {exc}")
                         break
