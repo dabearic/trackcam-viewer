@@ -13,15 +13,23 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from google.cloud import firestore, storage
-from PIL import Image
+from PIL import Image, ImageOps
 
 CROP_CONF_THRESHOLD = 0.2
 CROP_MAX_DIM        = 512
 CROP_JPEG_QUALITY   = 85
+
+# The web backend fires run_job at upload-prepare time, so the container
+# often starts cold-starting BEFORE the browser has finished PUT-ing all
+# files to GCS. Poll for missing blobs here, up to a generous timeout, so
+# the cold-start overlaps with (instead of following) the upload phase.
+UPLOAD_WAIT_TIMEOUT_S = 900   # 15 min — well above any realistic upload
+UPLOAD_WAIT_POLL_S    = 3
 
 _EXIF_EXIF_IFD           = 0x8769
 _EXIF_DATETIME_ORIGINAL  = 0x9003
@@ -127,6 +135,12 @@ def main():
     admin1_region = params.get("admin1_region")
     latitude      = params.get("latitude")
     longitude     = params.get("longitude")
+
+    # ── Wait for any uploads that are still in flight ─────────────────────
+    # The backend may have kicked off run_job before the browser finished
+    # PUT-ing files. Block here until all blobs exist, or fail after a
+    # generous timeout.
+    _wait_for_uploads(bucket, files, set_status)
 
     set_status("running", f"Downloading {len(files)} image(s) from storage…")
 
@@ -254,7 +268,12 @@ def main():
                     continue
                 if source_image is None:
                     try:
-                        source_image = Image.open(local_fp)
+                        # Apply EXIF orientation so portrait-mode photos crop
+                        # in the orientation the browser displays them in.
+                        # Without this, crops come out 90°/180° rotated for
+                        # any image whose camera embedded a non-default
+                        # Orientation tag (very common on trail cams).
+                        source_image = ImageOps.exif_transpose(Image.open(local_fp))
                     except Exception as exc:
                         log.append(f"crop: could not open {local_fp}: {exc}")
                         break
@@ -333,6 +352,36 @@ def main():
         set_status("done", f"Done — {count} prediction(s) saved",
                    {"completed_at": now, "summary": summary})
         print(f"[done] Saved {count} predictions for user {uid}")
+
+
+def _wait_for_uploads(bucket, files: list[str], set_status) -> None:
+    """Poll GCS until every path in `files` has an object, or time out.
+
+    First pass: if everything's already uploaded we don't touch the job
+    doc at all, so fully-uploaded-then-process flows behave identically
+    to before. Only prints a "Waiting for uploads…" status when we
+    actually need to wait.
+    """
+    missing = [p for p in files if not bucket.blob(p).exists()]
+    if not missing:
+        return
+
+    start = time.time()
+    while missing:
+        present = len(files) - len(missing)
+        set_status(
+            "running",
+            f"Waiting for uploads ({present}/{len(files)} ready)…",
+        )
+        if time.time() - start > UPLOAD_WAIT_TIMEOUT_S:
+            set_status(
+                "error",
+                f"Timed out waiting for uploads — {len(missing)}/{len(files)} "
+                f"file(s) never arrived in GCS",
+            )
+            raise SystemExit(1)
+        time.sleep(UPLOAD_WAIT_POLL_S)
+        missing = [p for p in files if not bucket.blob(p).exists()]
 
 
 def _now() -> str:

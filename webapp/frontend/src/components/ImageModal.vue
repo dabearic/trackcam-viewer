@@ -7,6 +7,19 @@
         <span class="modal__filename">{{ image.filename }}</span>
         <div class="modal__toolbar-right">
           <button
+            v-if="editMode"
+            class="modal__toggle modal__toggle--draw"
+            :class="{ 'modal__toggle--off': !drawMode }"
+            :title="drawMode ? 'Cancel drawing' : 'Drag a rectangle on the image to add a detection'"
+            @click="drawMode ? cancelDraw() : startAddDetection()"
+          >{{ drawMode ? 'Cancel draw' : '+ Add detection' }}</button>
+          <button
+            class="modal__toggle"
+            :class="{ 'modal__toggle--off': !editMode, 'modal__toggle--active': editMode }"
+            :title="editMode ? 'Exit edit mode' : 'Edit detections'"
+            @click="toggleEditMode"
+          >{{ editMode ? 'Done editing' : 'Edit' }}</button>
+          <button
             class="modal__toggle"
             :class="{ 'modal__toggle--off': !showBoxes }"
             :title="showBoxes ? 'Hide bounding boxes' : 'Show bounding boxes'"
@@ -41,6 +54,24 @@
       </div>
 
       <div class="modal__body">
+        <!-- Detection editor — docks as a left panel only while edit mode
+             is active AND a detection is selected (or being added). Hidden
+             entirely otherwise so the modal layout matches view-mode 1:1. -->
+        <DetectionEditor
+          v-if="editMode && editingDet"
+          class="modal__editor-dock"
+          :mode="editorMode"
+          :detection="editingDet"
+          :top-five="topFiveFor(image)"
+          :flat-species="flatSpecies"
+          :add-custom="addCustom"
+          :similar-count="similarCount"
+          :busy="editorBusy"
+          :error="editorError"
+          @save="onEditorSave"
+          @delete="onEditorDelete"
+          @close="closeEditor"
+        />
         <div class="modal__left">
         <!-- Image + bbox overlay -->
         <div
@@ -75,22 +106,45 @@
           <div
             v-if="imageLoaded && showBoxes && baseSize.w"
             class="modal__bbox-overlay"
+            :class="{ 'modal__bbox-overlay--editable': editMode && !drawMode }"
           >
             <div
               v-for="(det, i) in significantDetections"
-              :key="i"
+              :key="det.id || i"
               class="modal__bbox"
+              :class="{
+                'modal__bbox--manual':   det.manual,
+                'modal__bbox--editing':  editingDet && det.id === editingDet.id,
+              }"
               :style="bboxScreenStyle(det)"
-              :title="`${detectionLabel(det)} ${(det.conf * 100).toFixed(0)}%`"
+              :title="`${detectionLabel(det)} ${(det.conf * 100).toFixed(0)}%${det.manual ? ' (manual)' : ''}`"
+              @click.stop="openEditorForDet(det)"
             >
               <span
                 class="modal__bbox-label"
                 :style="{ background: categoryColor(det.category) }"
               >
+                <span v-if="det.manual" class="modal__bbox-manual" title="Manual edit">✎</span>
                 {{ detectionLabel(det) }} {{ (det.conf * 100).toFixed(0) }}%
               </span>
             </div>
           </div>
+
+          <!-- Draw-mode capture layer: only present while the user is in
+               draw mode. Sits above everything so a drag here doesn't
+               trigger pan/zoom on the underlying image. -->
+          <div
+            v-if="drawMode && imageLoaded"
+            class="modal__draw-layer"
+            @mousedown="onDrawDown"
+          >
+            <div
+              v-if="drawRectStyle"
+              class="modal__draw-rect"
+              :style="drawRectStyle"
+            ></div>
+          </div>
+
 
           <!-- Navigation arrows -->
           <button class="modal__nav modal__nav--prev" @click="navigate(-1)" :disabled="currentIndex <= 0">‹</button>
@@ -106,17 +160,22 @@
         <div v-if="significantDetections.length" class="modal__carousel">
           <DetectionCrop
             v-for="(det, i) in significantDetections"
-            :key="i"
+            :key="det.id || i"
             :image-src="imageUrl(image.filepath)"
             :det="det"
             :color="categoryColor(det.category)"
             :label="detectionLabel(det)"
-            :class="{ 'crop--active': zoomedDetIndex === i }"
+            :editable="editMode"
+            :class="{
+              'crop--active':  zoomedDetIndex === i,
+              'crop--editing': editingDet && det.id === editingDet.id,
+            }"
             role="button"
             tabindex="0"
             @click="onCropClick(i, det)"
             @keydown.enter.prevent="onCropClick(i, det)"
             @keydown.space.prevent="onCropClick(i, det)"
+            @delete="quickDeleteDetection(det)"
           />
         </div>
         </div><!-- end .modal__left -->
@@ -176,11 +235,22 @@
           <section v-if="significantDetections.length" class="panel__section">
             <h3 class="panel__heading">Detections</h3>
             <div class="panel__detections">
-              <div v-for="(det, i) in significantDetections" :key="i" class="panel__det">
+              <component
+                :is="editMode ? 'button' : 'div'"
+                v-for="(det, i) in significantDetections"
+                :key="det.id || i"
+                class="panel__det"
+                :class="{
+                  'panel__det--editable': editMode,
+                  'panel__det--editing':  editingDet && det.id === editingDet.id,
+                }"
+                @click="editMode && openEditorForDet(det)"
+              >
                 <span class="panel__det-dot" :style="{ background: categoryColor(det.category) }"></span>
                 <span>{{ detectionLabel(det) }}</span>
+                <span v-if="det.manual" class="panel__det-manual" title="Manual edit">✎</span>
                 <span class="panel__det-conf">{{ (det.conf * 100).toFixed(0) }}%</span>
-              </div>
+              </component>
             </div>
           </section>
 
@@ -211,18 +281,36 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import exifr from 'exifr'
 import DetectionCrop from './DetectionCrop.vue'
+import DetectionEditor from './DetectionEditor.vue'
 import { imageUrl, apiFetch } from '../firebase.js'
+import { useSpeciesCatalog } from '../composables/useSpeciesCatalog.js'
 
 const props = defineProps({
   image: Object,
   allImages: Array,
+  // Full predictions list (not just filtered) so the species tree sees every
+  // species ever observed, regardless of current gallery filters.
+  predictions: { type: Array, default: () => [] },
 })
-const emit = defineEmits(['close', 'navigate', 'deleted'])
+const emit = defineEmits(['close', 'navigate', 'deleted', 'detections-changed'])
 
 const confirmingDelete = ref(false)
 const deleting         = ref(false)
 const deleteError      = ref('')
 const showBoxes        = ref(true)
+
+// ── Edit mode ─────────────────────────────────────────────────────────────────
+const editMode        = ref(false)
+const drawMode        = ref(false)             // sub-state of editMode: drawing a new bbox
+const editingDet      = ref(null)              // detection being edited (or {bbox} when adding)
+const editorMode      = ref('edit')            // 'edit' | 'add'
+const editorError     = ref('')
+const editorBusy      = ref(false)
+const drawStart       = ref(null)              // { nx, ny } image-normalised
+const drawEnd         = ref(null)
+const predictionsRef  = computed(() => props.predictions)
+const speciesCatalog  = useSpeciesCatalog(predictionsRef)
+const { topFive: topFiveFor, flatSpecies, addCustom, loadCustom } = speciesCatalog
 
 function cancelDelete() {
   if (deleting.value) return
@@ -280,9 +368,23 @@ const containerStyle = computed(() => {
 
 const currentIndex = computed(() => props.allImages.indexOf(props.image))
 
-const significantDetections = computed(() =>
-  (props.image.detections ?? []).filter(d => d.conf >= 0.1)
-)
+// "Significant" detections — what we render as bboxes, crops, and side-
+// panel rows. In view mode we hide noise below 10% confidence; in edit
+// mode we surface every detection so "Apply to all 13" doesn't disagree
+// with what the user can actually see and click on.
+const significantDetections = computed(() => {
+  const all = props.image.detections ?? []
+  return editMode.value ? all : all.filter(d => d.conf >= 0.1)
+})
+
+// How many detections share the open editor's category — used for the
+// editor's "Apply to all N animal detections" checkbox. Counts every
+// detection (including low-conf ones) since the bulk endpoint does too.
+const similarCount = computed(() => {
+  if (!editingDet.value || editorMode.value === 'add') return 0
+  const cat = editingDet.value.category
+  return (props.image?.detections ?? []).filter(d => d.category === cat).length
+})
 
 // ── EXIF tags ─────────────────────────────────────────────────────────────────
 const exifTags    = ref(null)
@@ -339,8 +441,14 @@ function categoryColor(cat) {
 const NON_SPECIES = new Set(['blank', 'human', 'vehicle'])
 
 function detectionLabel(det) {
-  // For animal detections, show the image's species prediction when it's
-  // an actual species (not a blank/human/vehicle classifier fallback).
+  // Manual edits store the species directly on the detection — prefer that
+  // over the image-level prediction fallback below. Without this, the bbox
+  // label silently ignored every manual edit because it kept rendering the
+  // image-level inference output.
+  if (det.manual && det.label) return capitalize(det.label)
+  // Inference detections only carry a generic class label ("animal"), so
+  // for animal-category detections we surface the image's species
+  // prediction instead. Skipped for blank/human/vehicle predictions.
   if (det.category === '1') {
     const name = props.image.prediction?.common_name
     if (name && !NON_SPECIES.has(name.toLowerCase())) {
@@ -348,6 +456,226 @@ function detectionLabel(det) {
     }
   }
   return capitalize(det.label)
+}
+
+// ── Edit-mode helpers ────────────────────────────────────────────────────────
+// All bbox coords stored in detections are normalised [0,1] relative to the
+// image. The image renders inside a centred, scaled container, so these
+// helpers convert between mouse position (wrap-local px) and image-norm space.
+
+/** Mouse event → normalised image coords [0,1]. Null if the image isn't ready. */
+function mouseToNormalised(e) {
+  const wrap = wrapRef.value
+  const { w: bw, h: bh } = baseSize.value
+  if (!wrap || !bw || !bh) return null
+  const rect  = wrap.getBoundingClientRect()
+  const baseX = (wrap.clientWidth  - bw) / 2
+  const baseY = (wrap.clientHeight - bh) / 2
+  const imgX  = (e.clientX - rect.left - baseX - panX.value) / zoom.value
+  const imgY  = (e.clientY - rect.top  - baseY - panY.value) / zoom.value
+  return {
+    nx: Math.max(0, Math.min(1, imgX / bw)),
+    ny: Math.max(0, Math.min(1, imgY / bh)),
+  }
+}
+
+
+/** Style object for an in-progress draw rectangle (image-norm → screen px). */
+const drawRectStyle = computed(() => {
+  if (!drawStart.value || !drawEnd.value) return null
+  const wrap = wrapRef.value
+  const { w: bw, h: bh } = baseSize.value
+  if (!wrap || !bw || !bh) return null
+  const x = Math.min(drawStart.value.nx, drawEnd.value.nx)
+  const y = Math.min(drawStart.value.ny, drawEnd.value.ny)
+  const w = Math.abs(drawEnd.value.nx - drawStart.value.nx)
+  const h = Math.abs(drawEnd.value.ny - drawStart.value.ny)
+  const baseX = (wrap.clientWidth  - bw) / 2
+  const baseY = (wrap.clientHeight - bh) / 2
+  return {
+    left:   `${baseX + panX.value + x * bw * zoom.value}px`,
+    top:    `${baseY + panY.value + y * bh * zoom.value}px`,
+    width:  `${w * bw * zoom.value}px`,
+    height: `${h * bh * zoom.value}px`,
+  }
+})
+
+// ── Edit / delete / add handlers ─────────────────────────────────────────────
+
+function toggleEditMode() {
+  editMode.value = !editMode.value
+  closeEditor()
+  cancelDraw()
+}
+
+function openEditorForDet(det) {
+  if (!editMode.value) return
+  editingDet.value = det
+  editorMode.value = 'edit'
+  editorError.value = ''
+}
+
+function closeEditor() {
+  editingDet.value = null
+  editorError.value = ''
+  editorBusy.value = false
+}
+
+async function onEditorSave(payload) {
+  if (!editingDet.value) return
+  editorBusy.value = true
+  editorError.value = ''
+  try {
+    if (editorMode.value === 'add') {
+      const res = await apiFetch(
+        `/api/predictions/detections?path=${encodeURIComponent(props.image.filepath)}`,
+        {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            category:   payload.category,
+            label:      payload.label,
+            scientific: payload.scientific || undefined,
+            bbox:       editingDet.value.bbox,
+            conf:       payload.conf,
+          }),
+        },
+      )
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      props.image.detections = [...(props.image.detections ?? []), data.detection]
+      emit('detections-changed', props.image)
+    } else if (payload.applyToAll) {
+      // Bulk: apply this edit to every detection sharing the edited
+      // detection's category. Backend returns the full updated detections;
+      // splice each back into local state by id so reactivity sees the change.
+      const filterCat = editingDet.value.category
+      const res = await apiFetch(
+        `/api/predictions/detections/bulk?path=${encodeURIComponent(props.image.filepath)}`,
+        {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            category_filter: filterCat,
+            category:        payload.category,
+            label:           payload.label,
+            scientific:      payload.scientific || undefined,
+            conf:            payload.conf,
+          }),
+        },
+      )
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      const byId = new Map(data.detections.map(d => [d.id, d]))
+      props.image.detections = (props.image.detections ?? []).map(
+        d => byId.get(d.id) || d,
+      )
+      // Backend rewrites image-level prediction when the bulk includes a
+      // species label. Apply it locally so the side-panel "Prediction"
+      // section, the gallery filter dropdown, and SpeciesView all see the
+      // change without a reload.
+      if (data.prediction) props.image.prediction = data.prediction
+      emit('detections-changed', props.image)
+    } else {
+      const det = editingDet.value
+      const res = await apiFetch(
+        `/api/predictions/detections?path=${encodeURIComponent(props.image.filepath)}&id=${encodeURIComponent(det.id)}`,
+        {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            category:   payload.category,
+            label:      payload.label,
+            scientific: payload.scientific || undefined,
+            conf:       payload.conf,
+          }),
+        },
+      )
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      Object.assign(det, data.detection)
+      emit('detections-changed', props.image)
+    }
+    closeEditor()
+  } catch (e) {
+    editorError.value = `Save failed: ${e.message}`
+  } finally {
+    editorBusy.value = false
+  }
+}
+
+async function onEditorDelete() {
+  const det = editingDet.value
+  if (!det || !det.id) return closeEditor()
+  editorBusy.value = true
+  editorError.value = ''
+  try {
+    const res = await apiFetch(
+      `/api/predictions/detections?path=${encodeURIComponent(props.image.filepath)}&id=${encodeURIComponent(det.id)}`,
+      { method: 'DELETE' },
+    )
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    props.image.detections = (props.image.detections ?? []).filter(d => d.id !== det.id)
+    emit('detections-changed', props.image)
+    closeEditor()
+  } catch (e) {
+    editorError.value = `Delete failed: ${e.message}`
+  } finally {
+    editorBusy.value = false
+  }
+}
+
+// ── Draw-rectangle (add new detection) ───────────────────────────────────────
+
+const MIN_BBOX = 0.01  // smaller than 1% in either dim is treated as a misclick
+
+function startAddDetection() {
+  drawMode.value = true
+  closeEditor()
+}
+
+function cancelDraw() {
+  drawMode.value = false
+  drawStart.value = null
+  drawEnd.value = null
+}
+
+function onDrawDown(e) {
+  if (!drawMode.value || e.button !== 0) return
+  const p = mouseToNormalised(e)
+  if (!p) return
+  drawStart.value = p
+  drawEnd.value = p
+  e.preventDefault()
+  e.stopPropagation()
+  window.addEventListener('mousemove', onDrawMove)
+  window.addEventListener('mouseup',   onDrawUp)
+}
+
+function onDrawMove(e) {
+  if (!drawStart.value) return
+  const p = mouseToNormalised(e)
+  if (p) drawEnd.value = p
+}
+
+function onDrawUp(e) {
+  window.removeEventListener('mousemove', onDrawMove)
+  window.removeEventListener('mouseup',   onDrawUp)
+  if (!drawStart.value || !drawEnd.value) {
+    cancelDraw()
+    return
+  }
+  const x = Math.min(drawStart.value.nx, drawEnd.value.nx)
+  const y = Math.min(drawStart.value.ny, drawEnd.value.ny)
+  const w = Math.abs(drawEnd.value.nx - drawStart.value.nx)
+  const h = Math.abs(drawEnd.value.ny - drawStart.value.ny)
+  drawStart.value = null
+  drawEnd.value = null
+  drawMode.value = false
+  if (w < MIN_BBOX || h < MIN_BBOX) return  // ignore stray clicks
+  // Open editor pre-loaded with the drawn bbox; commit happens on Save.
+  editingDet.value = { bbox: [x, y, w, h] }
+  editorMode.value = 'add'
 }
 
 /**
@@ -437,14 +765,48 @@ function zoomToDetection(det) {
 }
 
 function onCropClick(i, det) {
-  // Toggle: clicking the currently-auto-zoomed crop resets; clicking any
-  // other crop jumps to it.
+  // In edit mode, clicking a crop selects that detection for editing
+  // (and zooms the image to it so you can actually see what you're
+  // editing while the dock takes up the left panel). View mode keeps
+  // its existing toggle: zoom-to-fit / reset.
+  if (editMode.value) {
+    openEditorForDet(det)
+    zoomToDetection(det)
+    zoomedDetIndex.value = i
+    return
+  }
   if (zoomedDetIndex.value === i && zoom.value > 1) {
     resetZoom()
     return
   }
   zoomToDetection(det)
   zoomedDetIndex.value = i
+}
+
+/** Quick-delete from the crop carousel. Mirrors the editor's Delete
+ *  button — no confirm, since the user has to be in edit mode and
+ *  explicitly click the X overlay. */
+async function quickDeleteDetection(det) {
+  if (!det || !det.id) return
+  try {
+    const res = await apiFetch(
+      `/api/predictions/detections?path=${encodeURIComponent(props.image.filepath)}&id=${encodeURIComponent(det.id)}`,
+      { method: 'DELETE' },
+    )
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    // If the editor was open on this detection, close it before the
+    // detection vanishes from local state.
+    if (editingDet.value && editingDet.value.id === det.id) closeEditor()
+    props.image.detections = (props.image.detections ?? []).filter(d => d.id !== det.id)
+    emit('detections-changed', props.image)
+  } catch (e) {
+    // Surface the error so the user knows the click had no effect; the
+    // editor's Delete path uses an inline error, but the carousel has no
+    // dedicated error slot, so a console + alert combo is the cheapest
+    // visible signal until we add a toast layer.
+    console.error('Detection delete failed:', e)
+    alert(`Delete failed: ${e.message}`)
+  }
 }
 
 function clampPan() {
@@ -550,11 +912,13 @@ function navigate(delta) {
 
 function onKeydown(e) {
   if (e.key === 'Escape') {
-    if (confirmingDelete.value) cancelDelete()
-    else emit('close')
+    if (confirmingDelete.value)        cancelDelete()
+    else if (editingDet.value)         closeEditor()
+    else if (drawMode.value)           cancelDraw()
+    else                               emit('close')
     return
   }
-  if (confirmingDelete.value) return
+  if (confirmingDelete.value || editingDet.value) return
   if (e.key === 'ArrowLeft')  navigate(-1)
   if (e.key === 'ArrowRight') navigate(1)
 }
@@ -565,6 +929,7 @@ onMounted(() => {
     resizeObserver = new ResizeObserver(() => computeContainerSize())
     resizeObserver.observe(wrapRef.value)
   }
+  loadCustom()
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
@@ -579,8 +944,14 @@ watch(() => props.image, () => {
   resetZoom()
   confirmingDelete.value = false
   deleteError.value = ''
+  // Reset edit state on navigation so an open editor doesn't carry over to
+  // a different image, but stay in edit mode itself — the user is likely to
+  // edit several images in one session.
+  closeEditor()
+  cancelDraw()
   loadExif()
 }, { immediate: true })
+
 </script>
 
 <style scoped>
@@ -661,6 +1032,18 @@ watch(() => props.image, () => {
 .modal__toggle--off {
   color: var(--text);
   background: var(--surface2);
+}
+
+.modal__toggle--active {
+  color: white;
+  background: var(--accent, #2d7d46);
+  border-color: var(--accent, #2d7d46);
+}
+
+.modal__toggle--draw:not(.modal__toggle--off) {
+  color: #1f2937;
+  background: #fbbf24;
+  border-color: #d97706;
 }
 
 .modal__delete:hover:not(:disabled) {
@@ -783,6 +1166,9 @@ watch(() => props.image, () => {
 .modal__carousel > .crop--active {
   box-shadow: 0 0 0 2px var(--accent, #60a5fa);
 }
+.modal__carousel > .crop--editing {
+  box-shadow: 0 0 0 2px #fbbf24;
+}
 
 .modal__image-wrap {
   flex: 1;
@@ -827,6 +1213,25 @@ watch(() => props.image, () => {
   position: absolute;
   border: 2px solid;
   pointer-events: none;
+  transition: box-shadow 0.12s, border-style 0.12s;
+}
+
+.modal__bbox--manual {
+  border-style: dashed;
+}
+
+/* In edit mode, the overlay flips to pointer-events:auto so boxes are
+   clickable. Boxes themselves opt-in via a hover halo. */
+.modal__bbox-overlay--editable { pointer-events: none; }
+.modal__bbox-overlay--editable .modal__bbox {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.modal__bbox-overlay--editable .modal__bbox:hover {
+  box-shadow: 0 0 0 3px rgba(255,255,255,0.35);
+}
+.modal__bbox--editing {
+  box-shadow: 0 0 0 3px rgba(96,165,250,0.65);
 }
 
 .modal__bbox-label {
@@ -839,6 +1244,31 @@ watch(() => props.image, () => {
   padding: 2px 5px;
   white-space: nowrap;
   border-radius: 3px 3px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.modal__bbox-manual {
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* Draw layer captures the drag for new detections without triggering
+   pan-on-drag. Sits above the canvas container but below the editor. */
+.modal__draw-layer {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  z-index: 5;
+  background: rgba(0,0,0,0.05);
+}
+
+.modal__draw-rect {
+  position: absolute;
+  border: 2px dashed #fbbf24;
+  background: rgba(251,191,36,0.15);
+  pointer-events: none;
 }
 
 .modal__nav {
@@ -997,6 +1427,27 @@ watch(() => props.image, () => {
   align-items: center;
   gap: 7px;
   font-size: 12px;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text);
+  text-align: left;
+  width: 100%;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.panel__det--editable {
+  cursor: pointer;
+}
+.panel__det--editable:hover {
+  background: var(--surface2);
+  border-color: var(--border);
+}
+.panel__det--editing {
+  background: var(--surface2);
+  border-color: #60a5fa;
 }
 
 .panel__det-dot {
@@ -1004,6 +1455,11 @@ watch(() => props.image, () => {
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.panel__det-manual {
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .panel__det-conf {

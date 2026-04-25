@@ -90,6 +90,7 @@
       v-if="selectedImage"
       :image="selectedImage"
       :all-images="filteredPredictions"
+      :predictions="predictions"
       @close="selectedImage = null"
       @navigate="openModal"
       @deleted="onImageDeleted"
@@ -237,6 +238,15 @@ const filteredPredictions = computed(() => {
     if (!filters.categories.includes(cat)) return false
     if (filters.folder && p.folder !== filters.folder) return false
     if (filters.species && p.prediction?.common_name !== filters.species) return false
+    if (filters.species) {
+      // Match either image-level prediction OR a manual detection label.
+      // Without the second leg, filtering by a species the user only added
+      // via single-detection edit would return zero images.
+      const matches =
+        p.prediction?.common_name === filters.species ||
+        (p.detections ?? []).some(d => d.manual && d.label === filters.species)
+      if (!matches) return false
+    }
     if (filters.minConfidence > 0 && (p.prediction_score ?? 0) < filters.minConfidence / 100) return false
     if (filters.hour !== null) {
       const h = predHour(p)
@@ -265,10 +275,24 @@ const groupedEvents = computed(() => {
     .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
 })
 
-const allSpecies = computed(() => {
-  const names = predictions.value.map(p => p.prediction?.common_name).filter(Boolean)
-  return [...new Set(names)].sort()
-})
+// Distinct species names for the filter dropdown. Pulls from both the
+// image-level inference prediction AND any manually-edited detection
+// labels — without the second source the filter wouldn't surface species
+// the user added by hand until they reloaded against new inference output.
+function _speciesNamesFor(preds) {
+  const names = new Set()
+  for (const p of preds) {
+    if (p.prediction?.common_name) names.add(p.prediction.common_name)
+    for (const d of (p.detections ?? [])) {
+      if (d.manual && d.label) names.add(d.label)
+    }
+  }
+  return names
+}
+
+const allSpecies = computed(() =>
+  [..._speciesNamesFor(predictions.value)].sort(),
+)
 
 const allFolders = computed(() => {
   const folders = predictions.value.map(p => p.folder).filter(Boolean)
@@ -278,7 +302,7 @@ const allFolders = computed(() => {
 const stats = computed(() => ({
   events:  groupedEvents.value.length,
   images:  filteredPredictions.value.length,
-  species: new Set(filteredPredictions.value.map(p => p.prediction?.common_name).filter(Boolean)).size,
+  species: _speciesNamesFor(filteredPredictions.value).size,
 }))
 
 function parseTimestamp(ts) {
