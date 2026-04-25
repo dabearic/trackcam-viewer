@@ -80,12 +80,18 @@
         </div>
 
         <div v-if="submitError" class="modal__error">{{ submitError }}</div>
-        <button type="submit" class="btn btn--primary" :disabled="AUTH_ENABLED && files.length === 0">
-          {{ AUTH_ENABLED ? 'Upload &amp; Process' : 'Run SpeciesNet' }}
+        <button
+          type="submit"
+          class="btn btn--primary"
+          :disabled="submitting || (AUTH_ENABLED && files.length === 0)"
+        >
+          {{ submitting ? 'Starting…' : (AUTH_ENABLED ? 'Upload &amp; Process' : 'Run SpeciesNet') }}
         </button>
       </form>
 
-      <!-- ── Upload progress (cloud only) ── -->
+      <!-- ── Upload progress (cloud only) ──
+           The inference container is already cold-starting in parallel,
+           so surface the live job status underneath the upload bar. -->
       <div v-else-if="phase === 'uploading'" class="modal__progress">
         <div class="progress__status">
           <span class="progress__dot progress__dot--running"></span>
@@ -93,6 +99,13 @@
         </div>
         <div class="progress__stage-track" style="margin-top:4px">
           <div class="progress__stage-fill" :style="{ width: uploadPct + '%' }"></div>
+        </div>
+        <div v-if="job.message" class="progress__status" style="margin-top:10px">
+          <span :class="`progress__dot progress__dot--${job.status}`"></span>
+          <span class="progress__message">{{ job.message }}</span>
+          <span v-if="elapsedSec !== null" class="progress__elapsed">
+            {{ formatElapsed(elapsedSec) }}
+          </span>
         </div>
       </div>
 
@@ -228,6 +241,11 @@ const locationError = ref('')
 const latitude     = ref(null)
 const longitude    = ref(null)
 const submitError  = ref('')
+// True while submit() is in flight. Without this, a double-click (or pressing
+// Enter twice quickly) re-enters submit() before the prepare request returns,
+// which mints a second job and uploads everything again — visible as the
+// upload counter ticking past uploadTotal.
+const submitting   = ref(false)
 
 // Phase: 'form' | 'uploading' | 'processing'
 const phase = ref('form')
@@ -348,6 +366,8 @@ function useCurrentLocation() {
 // ── Submit ────────────────────────────────────────────────────────────────────
 
 async function submit() {
+  if (submitting.value) return
+  submitting.value = true
   submitError.value = ''
   try {
     if (AUTH_ENABLED) {
@@ -357,6 +377,8 @@ async function submit() {
     }
   } catch (e) {
     submitError.value = e.message
+  } finally {
+    submitting.value = false
   }
 }
 
@@ -364,66 +386,83 @@ async function submitCloud() {
   if (!files.value.length) throw new Error('Please select at least one image file.')
   if (!folder.value.trim()) throw new Error('Please enter a folder name.')
 
-  // 1. Get signed upload URLs
-  const prepRes = await apiFetch('/api/upload/prepare', {
+  // Single-shot kickoff: the backend now returns signed URLs AND fires
+  // run_job right away. The Cloud Run Job cold-starts (30–60s) overlaps
+  // with the browser upload instead of following it.
+  const body = {
+    folder:    folder.value.trim(),
+    filenames: files.value.map(f => f.name),
+  }
+  if (country.value)        body.country       = country.value.toUpperCase()
+  if (admin1Region.value)   body.admin1_region = admin1Region.value.toUpperCase()
+  if (latitude.value  != null) body.latitude    = latitude.value
+  if (longitude.value != null) body.longitude   = longitude.value
+
+  const prepRes  = await apiFetch('/api/upload/prepare', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ folder: folder.value.trim(), filenames: files.value.map(f => f.name) }),
+    body: JSON.stringify(body),
   })
   const prepData = await prepRes.json()
   if (!prepRes.ok) throw new Error(prepData.detail ?? `HTTP ${prepRes.status}`)
 
   const uploads = prepData.uploads
-  if (!uploads.length) throw new Error('No supported image files found.')
 
-  // 2. Upload files directly to GCS
-  phase.value    = 'uploading'
+  if (!prepData.job_id) {
+    // Either everything was already processed or nothing supported.
+    job.value = {
+      status: 'done',
+      message: prepData.message ?? 'Nothing to do',
+      log: [], progress: {},
+    }
+    phase.value = 'processing'
+    return
+  }
+
+  // Job is already cold-starting. Begin polling now so any "Loading AI
+  // model…" / "Waiting for uploads…" messages surface while the user
+  // watches their files upload.
+  jobId.value = prepData.job_id
+  phase.value = 'uploading'
   uploadTotal.value = uploads.length
   uploadDone.value  = 0
+  startElapsed()
+  startPolling()
 
-  const gcsPaths = []
-  for (const { filename, url, gcs_path } of uploads) {
+  // Upload files to GCS. The inference container is already polling for
+  // them and will proceed as soon as the last one lands.
+  //
+  // Worker pool: N workers pull from a shared cursor. 6 matches the
+  // browser's per-origin HTTP/1.1 connection cap; GCS supports HTTP/2 so
+  // in practice these run multiplexed. Pushing higher gives diminishing
+  // returns and risks throttling on slow uplinks.
+  const CONCURRENCY = 6
+  let cursor = 0
+  const uploadOne = async ({ filename, url }) => {
     const file = files.value.find(f => f.name === filename)
-    if (!file) continue
+    if (!file) return
     const putRes = await fetch(url, {
       method: 'PUT',
       headers: { 'Content-Type': 'image/jpeg' },
       body: file,
     })
     if (!putRes.ok) throw new Error(`Failed to upload ${filename}: HTTP ${putRes.status}`)
-    gcsPaths.push(gcs_path)
     uploadDone.value++
   }
+  const workers = Array.from(
+    { length: Math.min(CONCURRENCY, uploads.length) },
+    async () => {
+      while (cursor < uploads.length) {
+        const i = cursor++
+        await uploadOne(uploads[i])
+      }
+    },
+  )
+  await Promise.all(workers)
 
-  // 3. Trigger inference job
-  const body = {
-    folder:    folder.value.trim(),
-    gcs_paths: gcsPaths,
-  }
-  if (country.value)      body.country       = country.value.toUpperCase()
-  if (admin1Region.value) body.admin1_region  = admin1Region.value.toUpperCase()
-  if (latitude.value  != null) body.latitude  = latitude.value
-  if (longitude.value != null) body.longitude = longitude.value
-
-  const procRes  = await apiFetch('/api/process', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  const procData = await procRes.json()
-  if (!procRes.ok) throw new Error(procData.detail ?? `HTTP ${procRes.status}`)
-
-  if (!procData.job_id) {
-    // Everything already processed
-    job.value = { status: 'done', message: procData.message, log: [], progress: {} }
-    phase.value = 'processing'
-    return
-  }
-
-  jobId.value = procData.job_id
+  // All uploads done — switch to the richer processing view. The job
+  // might already be running (or done!) by now.
   phase.value = 'processing'
-  startElapsed()
-  startPolling()
 }
 
 async function submitLocal() {
