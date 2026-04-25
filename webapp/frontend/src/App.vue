@@ -89,6 +89,7 @@
       v-if="selectedImage"
       :image="selectedImage"
       :all-images="filteredPredictions"
+      :predictions="predictions"
       @close="selectedImage = null"
       @navigate="openModal"
       @deleted="onImageDeleted"
