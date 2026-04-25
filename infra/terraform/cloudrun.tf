@@ -134,7 +134,7 @@ resource "terraform_data" "inference_gpu" {
   ]
 
   provisioner "local-exec" {
-    command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --execution-environment=gen2 --no-gpu-zonal-redundancy --region=${var.region} --project=${var.project_id}"
+    command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --execution-environment=gen2 --gpu-zonal-redundancy --region=${var.region} --project=${var.project_id}"
   }
 
   depends_on = [google_cloud_run_v2_job.inference]
