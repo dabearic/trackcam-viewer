@@ -115,9 +115,9 @@ def main():
         job_ref.update(update)
         print(f"[{status}] {message}")
 
-    # First thing: confirm the container is alive so the UI stops showing
+    # First thing: confirm the worker is alive so the UI stops showing
     # the cold-start placeholder set by the web backend.
-    set_status("running", "Container started — reading job config…")
+    set_status("running", "AI model ready — reading job config…")
 
     # ── Read job document ─────────────────────────────────────────────────────
     job_doc = job_ref.get().to_dict()

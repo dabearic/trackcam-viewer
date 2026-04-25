@@ -291,7 +291,7 @@ async def start_process(
     # inference container will overwrite this as soon as main() starts.
     job_ref.update({
         "status":  "running",
-        "message": "Starting inference container (cold start can take up to a minute)…",
+        "message": "Loading AI model (can take up to a minute)…",
         "updated_at": _now(),
     })
 
