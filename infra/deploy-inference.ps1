@@ -16,12 +16,20 @@ Write-Host "==> Pushing inference image..."
 docker push $IMAGE
 if ($LASTEXITCODE -ne 0) { throw "docker push failed" }
 
-Write-Host "==> Updating job image and re-applying GPU config..."
+Write-Host "==> Updating job image and re-applying GPU + volume config..."
+# Mirrors the gcloud command in terraform_data.inference_gpu so a deploy
+# never leaves the job in a state where the provisioner-managed fields
+# (GPU, zonal redundancy, model-cache volume, KAGGLEHUB_CACHE) are stale.
 gcloud beta run jobs update speciesnet-inference `
   --image $IMAGE `
   --gpu=1 --gpu-type=nvidia-l4 `
   --execution-environment=gen2 `
-  --gpu-zonal-redundancy `
+  --no-gpu-zonal-redundancy `
+  --update-env-vars=KAGGLEHUB_CACHE=/mnt/model-cache `
+  --clear-volumes `
+  --clear-volume-mounts `
+  --add-volume=name=model-cache,type=cloud-storage,bucket=trackcam-viewer-model-cache `
+  --add-volume-mount=volume=model-cache,mount-path=/mnt/model-cache `
   --region us-east4 `
   --project trackcam-viewer
 if ($LASTEXITCODE -ne 0) { throw "gcloud job update failed" }
