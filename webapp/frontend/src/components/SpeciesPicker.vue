@@ -71,13 +71,48 @@
         @click="addOpen = true"
       >+ Add new species</button>
       <div v-else class="species-picker__add-form">
-        <label class="species-picker__field">
+        <label class="species-picker__field species-picker__field--anchor">
           <span>Common name *</span>
-          <input v-model="newCommon" type="text" placeholder="e.g. Bobcat" />
+          <input
+            v-model="newCommon"
+            type="text"
+            placeholder="e.g. Bobcat"
+            autocomplete="off"
+            @input="onCommonInput"
+            @focus="commonFocused = true"
+            @blur="commonFocused = false"
+          />
+          <!-- iNaturalist autocomplete suggestions. Use mousedown.prevent
+               on each row so picking a suggestion doesn't blur the input
+               (which would close the dropdown before the click registered). -->
+          <div
+            v-if="commonFocused && (suggestions.length || suggestLoading)"
+            class="species-picker__suggestions"
+          >
+            <div v-if="suggestLoading && !suggestions.length" class="species-picker__suggestions-loading">
+              Searching iNaturalist…
+            </div>
+            <button
+              v-for="s in suggestions"
+              :key="s.id"
+              type="button"
+              class="species-picker__suggestion"
+              @mousedown.prevent="pickSuggestion(s)"
+            >
+              <span class="species-picker__suggestion-common">
+                {{ s.common_name || cap(s.name) }}
+                <span v-if="s.extinct" class="species-picker__suggestion-extinct">extinct</span>
+              </span>
+              <span class="species-picker__suggestion-meta">
+                <span class="species-picker__suggestion-sci">{{ s.name }}</span>
+                <span v-if="s.iconic" class="species-picker__suggestion-iconic">{{ s.iconic }}</span>
+              </span>
+            </button>
+          </div>
         </label>
         <label class="species-picker__field">
           <span>Scientific (optional)</span>
-          <input v-model="newScientific" type="text" placeholder="e.g. Lynx rufus" />
+          <input v-model="newScientific" type="text" placeholder="e.g. Lynx rufus" autocomplete="off" />
         </label>
 
         <!-- GBIF autofill -->
@@ -138,6 +173,52 @@ const newCommon     = ref('')
 const newScientific = ref('')
 const adding    = ref(false)
 const addError  = ref('')
+
+// ── iNaturalist common-name autocomplete ────────────────────────────────────
+const suggestions    = ref([])
+const suggestLoading = ref(false)
+const commonFocused  = ref(false)
+let suggestTimer = null
+let suggestSeq   = 0   // incremented per request; ignore stale responses
+
+function onCommonInput() {
+  // Re-typing always invalidates the GBIF preview (handled by an existing
+  // watcher) and triggers a new debounced autocomplete.
+  if (suggestTimer) clearTimeout(suggestTimer)
+  const q = newCommon.value.trim()
+  if (q.length < 2) {
+    suggestions.value = []
+    suggestLoading.value = false
+    return
+  }
+  suggestLoading.value = true
+  suggestTimer = setTimeout(() => fetchSuggestions(q), 250)
+}
+
+async function fetchSuggestions(q) {
+  const seq = ++suggestSeq
+  try {
+    const res = await apiFetch(`/api/species-autocomplete?q=${encodeURIComponent(q)}`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    if (seq !== suggestSeq) return  // a newer keystroke fired; drop this
+    suggestions.value = data.results || []
+  } catch {
+    if (seq === suggestSeq) suggestions.value = []
+  } finally {
+    if (seq === suggestSeq) suggestLoading.value = false
+  }
+}
+
+function pickSuggestion(s) {
+  newCommon.value     = s.common_name || cap(s.name)
+  newScientific.value = s.name
+  suggestions.value   = []
+  // Auto-fire GBIF lookup so the user gets the full named taxonomy in one
+  // click. iNat only returns ancestor ids (not names), so GBIF is still the
+  // shortest path to a class/order/family preview.
+  lookupTaxonomy()
+}
 
 // ── GBIF taxonomy autofill ──────────────────────────────────────────────────
 const looking      = ref(false)
@@ -217,6 +298,8 @@ function cancelAdd() {
   addError.value = ''
   lookupResult.value = null
   lookupError.value = ''
+  suggestions.value = []
+  suggestLoading.value = false
 }
 
 async function submitAdd() {
@@ -408,6 +491,88 @@ watch(() => props.selected, () => { addError.value = '' })
 .species-picker__field input:focus {
   outline: none;
   border-color: var(--accent, #2d7d46);
+}
+
+/* Wrapper that anchors the autocomplete dropdown below the input */
+.species-picker__field--anchor { position: relative; }
+
+.species-picker__suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+  z-index: 30;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.species-picker__suggestions-loading {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.species-picker__suggestion {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+  font: inherit;
+}
+
+.species-picker__suggestion:last-child { border-bottom: none; }
+.species-picker__suggestion:hover { background: var(--surface2); }
+
+.species-picker__suggestion-common {
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.species-picker__suggestion-extinct {
+  font-size: 9px;
+  background: #7f1d1d;
+  color: #fee2e2;
+  padding: 1px 5px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+}
+
+.species-picker__suggestion-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.species-picker__suggestion-sci {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.species-picker__suggestion-iconic {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .species-picker__error {
