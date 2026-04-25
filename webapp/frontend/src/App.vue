@@ -165,9 +165,11 @@ const filters = reactive({
   species: '',
   minConfidence: 0,
   categories: ['animal', 'human', 'vehicle', 'blank', 'unknown'],
+  categoryMode: 'any',  // 'any' | 'all'
   dateFrom: '',
   dateTo: '',
   hour: null,
+  month: null,
 })
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -230,12 +232,37 @@ function getCategory(pred) {
   return 'animal'
 }
 
+// All categories present on a prediction. Detections drive the multi-category
+// case (e.g. an image with both a human and an animal detection); the image-
+// level prediction adds blank/human/vehicle when it disagrees with detections,
+// and 'animal' when the species classifier produced a name without a matching
+// detection box. Used by the category filter's "all of" mode.
+function getCategories(pred) {
+  const cats = new Set()
+  for (const d of (pred.detections ?? [])) {
+    if (d.category === '1') cats.add('animal')
+    else if (d.category === '2') cats.add('human')
+    else if (d.category === '3') cats.add('vehicle')
+  }
+  const name = pred.prediction?.common_name?.toLowerCase()
+  if (name === 'blank') cats.add('blank')
+  else if (name === 'human') cats.add('human')
+  else if (name === 'vehicle') cats.add('vehicle')
+  else if (name && cats.size === 0) cats.add('animal')
+  if (cats.size === 0) cats.add('unknown')
+  return cats
+}
+
 const filteredPredictions = computed(() => {
   const from = filters.dateFrom
   const to   = filters.dateTo
   return predictions.value.filter(p => {
-    const cat = getCategory(p)
-    if (!filters.categories.includes(cat)) return false
+    if (filters.categories.length === 0) return false
+    const cats = getCategories(p)
+    const matches = filters.categoryMode === 'all'
+      ? filters.categories.every(c => cats.has(c))
+      : filters.categories.some(c => cats.has(c))
+    if (!matches) return false
     if (filters.folder && p.folder !== filters.folder) return false
     if (filters.species && p.prediction?.common_name !== filters.species) return false
     if (filters.species) {
@@ -251,6 +278,10 @@ const filteredPredictions = computed(() => {
     if (filters.hour !== null) {
       const h = predHour(p)
       if (h !== filters.hour) return false
+    }
+    if (filters.month !== null) {
+      const m = predMonth(p)
+      if (m !== filters.month) return false
     }
     if (from || to) {
       const date = predDate(p)
@@ -332,6 +363,11 @@ function predHour(p) {
   return ts.length >= 10 ? parseInt(ts.slice(8, 10), 10) : -1
 }
 
+function predMonth(p) {
+  const ts = predTs(p)
+  return ts.length >= 6 ? parseInt(ts.slice(4, 6), 10) - 1 : -1
+}
+
 function openModal(image) { selectedImage.value = image }
 
 function onImageDeleted(image) {
@@ -378,9 +414,10 @@ async function doDelete() {
   }
 }
 
-function applyHistogramFilter({ species, hour }) {
+function applyHistogramFilter({ species, hour = null, month = null }) {
   filters.species = species
   filters.hour    = hour
+  filters.month   = month
   view.value      = 'gallery'
 }
 

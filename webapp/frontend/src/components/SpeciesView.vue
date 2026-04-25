@@ -74,6 +74,7 @@
                         @mouseenter="barHover = { id: `${card.key}-m${m}`, label: MONTH_NAMES[m], count: n, x: $event.clientX, y: $event.clientY }"
                         @mousemove="barHover = { ...barHover, x: $event.clientX, y: $event.clientY }"
                         @mouseleave="barHover = null"
+                        @click="emit('filter', { species: card.rawName, month: m })"
                       />
                     </svg>
                     <div class="histogram__labels">
@@ -257,23 +258,23 @@ const speciesCards = computed(() => {
 
   const cards = []
   for (const [commonName, preds] of groups.entries()) {
-    const sorted = [...preds].sort((a, b) => {
-      const sa = a.prediction_score ?? 0
-      const sb = b.prediction_score ?? 0
-      if (sb !== sa) return sb - sa
-      const ta = timestampOf(a)
-      const tb = timestampOf(b)
-      return tb.localeCompare(ta)
-    })
-    const top = sorted.slice(0, 5).map(pred => {
+    const ranked = preds.map(pred => {
       const det = bestDetection(pred)
-      return {
-        pred,
-        cropPath: det?.crop_gcs_path || null,
-        bbox: det?.bbox || null,
-        when: formatTimestamp(timestampOf(pred)),
-      }
+      const [, , bw = 0, bh = 0] = det?.bbox || []
+      const area  = bw * bh
+      const score = pred.prediction_score ?? 0
+      return { pred, det, rank: area * score }
     })
+    ranked.sort((a, b) => {
+      if (b.rank !== a.rank) return b.rank - a.rank
+      return timestampOf(b.pred).localeCompare(timestampOf(a.pred))
+    })
+    const top = ranked.slice(0, 5).map(({ pred, det }) => ({
+      pred,
+      cropPath: det?.crop_gcs_path || null,
+      bbox: det?.bbox || null,
+      when: formatTimestamp(timestampOf(pred)),
+    }))
     const hours  = new Array(24).fill(0)
     const months = new Array(12).fill(0)
     for (const pred of preds) {
