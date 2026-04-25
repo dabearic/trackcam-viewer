@@ -199,7 +199,7 @@
         >{{ job.log.join('\n') }}</pre>
 
         <div class="progress__actions">
-          <button v-if="job.status === 'done'" class="btn btn--primary" @click="$emit('done')">
+          <button v-if="job.status === 'done'" class="btn btn--primary" @click="$emit('done', AUTH_ENABLED ? folder.trim() : '')">
             Reload gallery
           </button>
           <button v-if="job.status === 'error' || job.status === 'done'" class="btn" @click="reset">
