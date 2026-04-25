@@ -95,25 +95,10 @@ resource "google_cloud_run_v2_job" "inference" {
           name  = "GCP_PROJECT"
           value = var.project_id
         }
-        # Redirect kagglehub's cache onto the GCS-mounted volume so the
-        # SpeciesNet weights persist across job invocations.
-        env {
-          name  = "KAGGLEHUB_CACHE"
-          value = "/mnt/model-cache"
-        }
-
-        volume_mounts {
-          name       = "model-cache"
-          mount_path = "/mnt/model-cache"
-        }
-      }
-
-      volumes {
-        name = "model-cache"
-        gcs {
-          bucket    = google_storage_bucket.model_cache.name
-          read_only = false
-        }
+        # KAGGLEHUB_CACHE env, the model-cache volume, and the volume mount
+        # are applied via the inference_gpu provisioner below — declaring
+        # them here would race with the gcloud update that re-asserts GPU
+        # config and wipe v2-only fields.
       }
     }
   }
@@ -124,17 +109,21 @@ resource "google_cloud_run_v2_job" "inference" {
   ]
 }
 
-# node_selector (GPU config) is not yet in the Terraform provider schema.
-# Apply it via gcloud after every job create or update so the GPU config
-# is never silently wiped by a Terraform in-place update.
+# GPU config and v2-only fields (GCS volume, mount, KAGGLEHUB_CACHE env) are
+# applied via gcloud after every job create or update. The Terraform google
+# provider's in-place updates use the v1 (Knative) API view, which silently
+# drops v2-only fields like GCS volumes — so we treat this provisioner as
+# the source of truth for everything Cloud Run-Job-specific that doesn't
+# round-trip cleanly through the provider.
 resource "terraform_data" "inference_gpu" {
   triggers_replace = [
     google_cloud_run_v2_job.inference.id,
     var.inference_image,
+    google_storage_bucket.model_cache.name,
   ]
 
   provisioner "local-exec" {
-    command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --execution-environment=gen2 --gpu-zonal-redundancy --region=${var.region} --project=${var.project_id}"
+    command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --execution-environment=gen2 --gpu-zonal-redundancy --update-env-vars=KAGGLEHUB_CACHE=/mnt/model-cache --clear-volumes --clear-volume-mounts --add-volume=name=model-cache,type=cloud-storage,bucket=${google_storage_bucket.model_cache.name} --add-volume-mount=volume=model-cache,mount-path=/mnt/model-cache --region=${var.region} --project=${var.project_id}"
   }
 
   depends_on = [google_cloud_run_v2_job.inference]
