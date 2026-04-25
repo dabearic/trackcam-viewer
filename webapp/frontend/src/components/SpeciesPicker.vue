@@ -27,39 +27,26 @@
       </button>
     </section>
 
-    <!-- Tier 2: full species tree (or filtered flat list when searching) -->
-    <section class="species-picker__section">
-      <h4 class="species-picker__heading">
-        {{ query ? 'Matches' : 'Known species' }}
-      </h4>
-      <div v-if="query && filteredFlat.length === 0" class="species-picker__empty">
-        No matches.
+    <!-- Tier 2: search results. Shown only while the user is actively
+         searching — an empty query collapses this section so the picker
+         stays compact (top-5 + Add). -->
+    <section v-if="query" class="species-picker__section">
+      <h4 class="species-picker__heading">Matches</h4>
+      <div v-if="filteredFlat.length === 0" class="species-picker__empty">
+        No matches. Try fewer characters, or add a new species below.
       </div>
-      <!-- Flat results when searching -->
-      <template v-if="query">
-        <button
-          v-for="sp in filteredFlat"
-          :key="sp.common_name"
-          type="button"
-          class="species-picker__row"
-          :class="{ 'species-picker__row--selected': selected === sp.common_name }"
-          @click="$emit('select', { common_name: sp.common_name, scientific: sp.scientific })"
-        >
-          <span class="species-picker__label">{{ cap(sp.common_name) }}</span>
-          <span v-if="sp.scientific" class="species-picker__sci">{{ sp.scientific }}</span>
-          <span v-if="sp.custom" class="species-picker__badge">custom</span>
-        </button>
-      </template>
-      <!-- Tree when not searching -->
-      <div v-else class="species-picker__tree">
-        <SpeciesTreeNode
-          v-for="root in tree"
-          :key="root.key"
-          :node="root"
-          :selected="selected"
-          @select="$emit('select', { common_name: $event.common_name, scientific: $event.scientific })"
-        />
-      </div>
+      <button
+        v-for="sp in filteredFlat"
+        :key="sp.common_name"
+        type="button"
+        class="species-picker__row"
+        :class="{ 'species-picker__row--selected': selected === sp.common_name }"
+        @click="$emit('select', { common_name: sp.common_name, scientific: sp.scientific })"
+      >
+        <span class="species-picker__label">{{ cap(sp.common_name) }}</span>
+        <span v-if="sp.scientific" class="species-picker__sci">{{ sp.scientific }}</span>
+        <span v-if="sp.custom" class="species-picker__badge">custom</span>
+      </button>
     </section>
 
     <!-- Tier 3: add a new species -->
@@ -151,13 +138,11 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import SpeciesTreeNode from './SpeciesTreeNode.vue'
 import { apiFetch } from '../firebase.js'
 
 const props = defineProps({
   // From useSpeciesCatalog
   topFive:    { type: Array,  default: () => [] },
-  tree:       { type: Array,  default: () => [] },
   flatSpecies:{ type: Array,  default: () => [] },
   addCustom:  { type: Function, required: true },
   // Currently-selected common_name (for highlight)
@@ -441,8 +426,6 @@ watch(() => props.selected, () => { addError.value = '' })
   font-style: italic;
   padding: 6px 8px;
 }
-
-.species-picker__tree { display: flex; flex-direction: column; }
 
 .species-picker__add-btn {
   background: var(--surface2);

@@ -63,7 +63,6 @@
           :mode="editorMode"
           :detection="editingDet"
           :top-five="topFiveFor(image)"
-          :tree="speciesTree"
           :flat-species="flatSpecies"
           :add-custom="addCustom"
           :busy="editorBusy"
@@ -305,7 +304,7 @@ const drawStart       = ref(null)              // { nx, ny } image-normalised
 const drawEnd         = ref(null)
 const predictionsRef  = computed(() => props.predictions)
 const speciesCatalog  = useSpeciesCatalog(predictionsRef)
-const { topFive: topFiveFor, tree: speciesTree, flatSpecies, addCustom, loadCustom } = speciesCatalog
+const { topFive: topFiveFor, flatSpecies, addCustom, loadCustom } = speciesCatalog
 
 function cancelDelete() {
   if (deleting.value) return

@@ -6,35 +6,18 @@ import { apiFetch } from '../firebase.js'
 // the species picker.
 const NON_SPECIES = new Set(['blank', 'human', 'vehicle', 'animal'])
 
-const cap = s => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '')
-
 /**
- * SpeciesNet labels look like:
- *   uuid;class;order;family;genus;species;common_name
- * Some entries are shorter (e.g. just `;blank` for the blank class), so we
- * defensively pad to length 7 and strip empties later.
- */
-function parseTaxonomy(rawLabel) {
-  if (!rawLabel) return null
-  const parts = rawLabel.split(';')
-  while (parts.length < 7) parts.push('')
-  const [id, klass, order, family, genus, species, common_name] = parts
-  const scientific = (genus && species)
-    ? `${cap(genus)} ${species}`
-    : cap(klass)
-  return { id, class: klass, order, family, genus, species, common_name, scientific, raw: rawLabel }
-}
-
-/**
- * Builds three views of the species universe for the picker UI:
+ * Builds two views of the species universe for the picker UI:
  *
  *  - topFive(image)  → the inference candidates for the current photo
  *  - flatSpecies     → every distinct species seen across loaded predictions
  *                      plus user-added custom species
- *  - tree            → flatSpecies grouped by class > order > family > leaf
  *
  * The composable owns a small bit of state (custom species fetched from
- * the backend) so callers don't have to.
+ * the backend) so callers don't have to. The frontend used to render a
+ * class > order > family > leaf tree as well; that was dropped in favor
+ * of search-only navigation, so taxonomy parsing/grouping lives only in
+ * the backend lookup endpoints now.
  */
 export function useSpeciesCatalog(predictionsRef) {
   const customSpecies = ref([])
@@ -102,43 +85,6 @@ export function useSpeciesCatalog(predictionsRef) {
     )
   })
 
-  /** Hierarchical tree: class → order → family → species leaf. */
-  const tree = computed(() => {
-    const root = { children: new Map(), label: '', key: '' }
-
-    function ensure(parent, key, label) {
-      const k = key || '_unknown'
-      if (!parent.children.has(k)) {
-        parent.children.set(k, { children: new Map(), label: label || 'Other', key: k })
-      }
-      return parent.children.get(k)
-    }
-
-    for (const sp of flatSpecies.value) {
-      const tax = parseTaxonomy(sp.raw)
-      // Custom species may have `parent` like "mammalia;carnivora;felidae"
-      const parentParts = (sp.parent || '').split(';').map(s => s.trim())
-      const klass  = tax?.class  || parentParts[0] || ''
-      const order  = tax?.order  || parentParts[1] || ''
-      const family = tax?.family || parentParts[2] || ''
-
-      const cNode = ensure(root, klass.toLowerCase(),  cap(klass))
-      const oNode = order  ? ensure(cNode, order.toLowerCase(),  cap(order))  : cNode
-      const fNode = family ? ensure(oNode, family.toLowerCase(), cap(family)) : oNode
-      const leaf  = ensure(fNode, sp.common_name.toLowerCase(), cap(sp.common_name))
-      leaf.species = sp
-    }
-
-    // Recursively convert nested Maps → arrays, sort siblings alphabetically.
-    function toArr(node) {
-      const children = Array.from(node.children.values())
-        .map(toArr)
-        .sort((a, b) => a.label.localeCompare(b.label))
-      return { label: node.label, key: node.key, species: node.species, children }
-    }
-    return toArr(root).children
-  })
-
   /** Inference candidates for one image — top-5 minus non-species buckets. */
   function topFive(image) {
     return (image?.top5 ?? []).filter(
@@ -148,7 +94,6 @@ export function useSpeciesCatalog(predictionsRef) {
 
   return {
     flatSpecies,
-    tree,
     topFive,
     customSpecies,
     customLoaded,

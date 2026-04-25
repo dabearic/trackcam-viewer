@@ -32,7 +32,6 @@
       <span class="det-editor__label">Species</span>
       <SpeciesPicker
         :top-five="topFive"
-        :tree="tree"
         :flat-species="flatSpecies"
         :add-custom="addCustom"
         :selected="label"
@@ -99,7 +98,6 @@ const props = defineProps({
   mode: { type: String, default: 'edit' },           // 'edit' | 'add'
   detection: { type: Object, default: null },         // existing det for edit
   topFive:    { type: Array, default: () => [] },
-  tree:       { type: Array, default: () => [] },
   flatSpecies:{ type: Array, default: () => [] },
   addCustom:  { type: Function, required: true },
   busy:       { type: Boolean, default: false },
