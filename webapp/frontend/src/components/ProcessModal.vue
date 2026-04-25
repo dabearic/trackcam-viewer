@@ -80,8 +80,12 @@
         </div>
 
         <div v-if="submitError" class="modal__error">{{ submitError }}</div>
-        <button type="submit" class="btn btn--primary" :disabled="AUTH_ENABLED && files.length === 0">
-          {{ AUTH_ENABLED ? 'Upload &amp; Process' : 'Run SpeciesNet' }}
+        <button
+          type="submit"
+          class="btn btn--primary"
+          :disabled="submitting || (AUTH_ENABLED && files.length === 0)"
+        >
+          {{ submitting ? 'Starting…' : (AUTH_ENABLED ? 'Upload &amp; Process' : 'Run SpeciesNet') }}
         </button>
       </form>
 
@@ -238,6 +242,11 @@ const locationError = ref('')
 const latitude     = ref(null)
 const longitude    = ref(null)
 const submitError  = ref('')
+// True while submit() is in flight. Without this, a double-click (or pressing
+// Enter twice quickly) re-enters submit() before the prepare request returns,
+// which mints a second job and uploads everything again — visible as the
+// upload counter ticking past uploadTotal.
+const submitting   = ref(false)
 
 // Phase: 'form' | 'uploading' | 'processing'
 const phase = ref('form')
@@ -358,6 +367,8 @@ function useCurrentLocation() {
 // ── Submit ────────────────────────────────────────────────────────────────────
 
 async function submit() {
+  if (submitting.value) return
+  submitting.value = true
   submitError.value = ''
   try {
     if (AUTH_ENABLED) {
@@ -367,6 +378,8 @@ async function submit() {
     }
   } catch (e) {
     submitError.value = e.message
+  } finally {
+    submitting.value = false
   }
 }
 
@@ -419,9 +432,16 @@ async function submitCloud() {
 
   // Upload files to GCS. The inference container is already polling for
   // them and will proceed as soon as the last one lands.
-  for (const { filename, url } of uploads) {
+  //
+  // Worker pool: N workers pull from a shared cursor. 6 matches the
+  // browser's per-origin HTTP/1.1 connection cap; GCS supports HTTP/2 so
+  // in practice these run multiplexed. Pushing higher gives diminishing
+  // returns and risks throttling on slow uplinks.
+  const CONCURRENCY = 6
+  let cursor = 0
+  const uploadOne = async ({ filename, url }) => {
     const file = files.value.find(f => f.name === filename)
-    if (!file) continue
+    if (!file) return
     const putRes = await fetch(url, {
       method: 'PUT',
       headers: { 'Content-Type': 'image/jpeg' },
@@ -430,6 +450,16 @@ async function submitCloud() {
     if (!putRes.ok) throw new Error(`Failed to upload ${filename}: HTTP ${putRes.status}`)
     uploadDone.value++
   }
+  const workers = Array.from(
+    { length: Math.min(CONCURRENCY, uploads.length) },
+    async () => {
+      while (cursor < uploads.length) {
+        const i = cursor++
+        await uploadOne(uploads[i])
+      }
+    },
+  )
+  await Promise.all(workers)
 
   // All uploads done — switch to the richer processing view. The job
   // might already be running (or done!) by now.

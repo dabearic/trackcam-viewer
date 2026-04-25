@@ -1,9 +1,15 @@
 # ── Stage 1: build Vue frontend ───────────────────────────────────────────────
-FROM node:20-alpine AS frontend-build
+# node:20-slim (glibc/Debian) instead of alpine to sidestep the npm optional-deps
+# bug (npm/cli#4828): when package-lock.json is generated on Windows, the
+# linux-musl rollup binary isn't listed, so `npm ci` on alpine fails to find
+# @rollup/rollup-linux-x64-musl at build time. Using `npm install` (not `npm ci`)
+# also tolerates the same mismatch by resolving platform-specific optional deps
+# at install time. This stage is discarded; only dist/ is copied forward.
+FROM node:20-slim AS frontend-build
 
 WORKDIR /build
 COPY webapp/frontend/package*.json ./
-RUN npm ci --no-audit --no-fund
+RUN npm install --no-audit --no-fund
 COPY webapp/frontend/ ./
 RUN npm run build          # outputs to /build/dist
 
