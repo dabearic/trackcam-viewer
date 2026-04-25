@@ -1,5 +1,13 @@
 <template>
   <aside class="filterbar">
+    <div v-if="folders.length" class="filterbar__section">
+      <label class="filterbar__label">Folder</label>
+      <select class="filterbar__select" :value="filters.folder" @change="emit('update', { folder: $event.target.value })">
+        <option value="">All folders</option>
+        <option v-for="f in folders" :key="f" :value="f">{{ f }}</option>
+      </select>
+    </div>
+
     <div class="filterbar__section">
       <label class="filterbar__label">Species</label>
       <select class="filterbar__select" :value="filters.species" @change="emit('update', { species: $event.target.value })">
@@ -74,6 +82,7 @@
 <script setup>
 const props = defineProps({
   species: Array,
+  folders: { type: Array, default: () => [] },
   filters: Object,
   total: Number,
   filtered: Number,
@@ -104,6 +113,7 @@ function toggleCategory(key) {
 
 function clearFilters() {
   emit('update', {
+    folder: '',
     species: '',
     minConfidence: 0,
     categories: CATEGORIES.map(c => c.key),

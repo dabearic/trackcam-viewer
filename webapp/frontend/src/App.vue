@@ -55,6 +55,7 @@
       <FilterBar
         v-if="view === 'gallery'"
         :species="allSpecies"
+        :folders="allFolders"
         :filters="filters"
         :total="predictions.length"
         :filtered="filteredPredictions.length"
@@ -159,6 +160,7 @@ const signingIn    = ref(false)
 const signInError  = ref('')
 
 const filters = reactive({
+  folder: '',
   species: '',
   minConfidence: 0,
   categories: ['animal', 'human', 'vehicle', 'blank', 'unknown'],
@@ -233,6 +235,7 @@ const filteredPredictions = computed(() => {
   return predictions.value.filter(p => {
     const cat = getCategory(p)
     if (!filters.categories.includes(cat)) return false
+    if (filters.folder && p.folder !== filters.folder) return false
     if (filters.species && p.prediction?.common_name !== filters.species) return false
     if (filters.minConfidence > 0 && (p.prediction_score ?? 0) < filters.minConfidence / 100) return false
     if (filters.hour !== null) {
@@ -265,6 +268,11 @@ const groupedEvents = computed(() => {
 const allSpecies = computed(() => {
   const names = predictions.value.map(p => p.prediction?.common_name).filter(Boolean)
   return [...new Set(names)].sort()
+})
+
+const allFolders = computed(() => {
+  const folders = predictions.value.map(p => p.folder).filter(Boolean)
+  return [...new Set(folders)].sort()
 })
 
 const stats = computed(() => ({
@@ -352,9 +360,13 @@ function applyHistogramFilter({ species, hour }) {
   view.value      = 'gallery'
 }
 
-async function onProcessDone() {
+async function onProcessDone(folder) {
   showProcess.value = false
   await loadPredictions()
+  if (folder && allFolders.value.includes(folder)) {
+    filters.folder = folder
+    view.value     = 'gallery'
+  }
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
