@@ -347,8 +347,7 @@ watch(() => props.selected, () => { addError.value = '' })
   display: flex;
   flex-direction: column;
   gap: 8px;
-  width: 280px;
-  max-height: 60vh;
+  width: 100%;
 }
 
 .species-picker__search {
@@ -374,12 +373,8 @@ watch(() => props.selected, () => { addError.value = '' })
   flex-shrink: 0;
 }
 
-.species-picker__section:nth-child(3) {
-  /* The tree is the only section that needs to scroll */
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-}
+/* Outer container (DetectionEditor) handles vertical scroll, so the tree
+   itself flows naturally instead of nesting two scrollbars. */
 
 .species-picker__heading {
   font-size: 10px;

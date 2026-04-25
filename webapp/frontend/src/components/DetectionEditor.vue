@@ -1,5 +1,5 @@
 <template>
-  <div class="det-editor" :style="positionStyle" @click.stop>
+  <div class="det-editor" @click.stop>
     <div class="det-editor__header">
       <span class="det-editor__title">{{ mode === 'add' ? 'Add detection' : 'Edit detection' }}</span>
       <button type="button" class="det-editor__close" @click="$emit('close')">✕</button>
@@ -104,9 +104,6 @@ const props = defineProps({
   addCustom:  { type: Function, required: true },
   busy:       { type: Boolean, default: false },
   error:      { type: String, default: '' },
-  // Anchor position in parent's coordinate space (px). If omitted, the
-  // editor renders centred (caller can override via wrapper).
-  anchor:     { type: Object, default: null },        // { x, y, side?: 'right'|'left' }
 })
 const emit = defineEmits(['save', 'delete', 'close'])
 
@@ -159,38 +156,24 @@ function onSave() {
   })
 }
 
-// ── Positioning ─────────────────────────────────────────────────────────────
-// Anchor.x and anchor.y are viewport coords (the editor renders position:fixed
-// via a <Teleport> in the parent). Caller has already clamped them to keep
-// the editor inside the viewport, so we just translate them straight to CSS.
-const positionStyle = computed(() => {
-  const a = props.anchor
-  if (!a) return null
-  return { left: `${a.x}px`, top: `${a.y}px` }
-})
 </script>
 
 <style scoped>
 .det-editor {
-  /* position: fixed so the editor floats above the modal/wrap rather than
-     getting clipped by .modal__image-wrap's overflow:hidden. Rendered into
-     <body> via <Teleport> in ImageModal so its stacking context is clean. */
-  position: fixed;
+  /* Renders as a left-side dock inside .modal__body. Fixed width, full
+     height of the parent flex container, internal vertical scroll when
+     the form (mostly the species tree) is taller than the modal. */
+  width: 320px;
+  flex-shrink: 0;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+  border-right: 1px solid var(--border);
   padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  z-index: 250;
-  width: 304px;
-  max-width: calc(100vw - 16px);
-  max-height: calc(100vh - 16px);
-  /* Internal scroll when the form is taller than the viewport — keeps the
-     Save/Cancel actions reachable on tiny windows. */
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 
 .det-editor__header {

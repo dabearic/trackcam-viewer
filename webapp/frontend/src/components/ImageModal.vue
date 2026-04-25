@@ -54,6 +54,24 @@
       </div>
 
       <div class="modal__body">
+        <!-- Detection editor — docks as a left panel only while edit mode
+             is active AND a detection is selected (or being added). Hidden
+             entirely otherwise so the modal layout matches view-mode 1:1. -->
+        <DetectionEditor
+          v-if="editMode && editingDet"
+          class="modal__editor-dock"
+          :mode="editorMode"
+          :detection="editingDet"
+          :top-five="topFiveFor(image)"
+          :tree="speciesTree"
+          :flat-species="flatSpecies"
+          :add-custom="addCustom"
+          :busy="editorBusy"
+          :error="editorError"
+          @save="onEditorSave"
+          @delete="onEditorDelete"
+          @close="closeEditor"
+        />
         <div class="modal__left">
         <!-- Image + bbox overlay -->
         <div
@@ -127,27 +145,6 @@
             ></div>
           </div>
 
-          <!-- Detection editor popover. Teleported to <body> so the popover
-               isn't clipped by .modal__image-wrap's overflow:hidden and
-               doesn't fight the modal's stacking context. Anchor coords
-               are viewport-relative; see bboxAnchor(). -->
-          <Teleport to="body">
-            <DetectionEditor
-              v-if="editingDet"
-              :mode="editorMode"
-              :detection="editingDet"
-              :top-five="topFiveFor(image)"
-              :tree="speciesTree"
-              :flat-species="flatSpecies"
-              :add-custom="addCustom"
-              :anchor="editorAnchor"
-              :busy="editorBusy"
-              :error="editorError"
-              @save="onEditorSave"
-              @delete="onEditorDelete"
-              @close="closeEditor"
-            />
-          </Teleport>
 
           <!-- Navigation arrows -->
           <button class="modal__nav modal__nav--prev" @click="navigate(-1)" :disabled="currentIndex <= 0">‹</button>
@@ -302,7 +299,6 @@ const editMode        = ref(false)
 const drawMode        = ref(false)             // sub-state of editMode: drawing a new bbox
 const editingDet      = ref(null)              // detection being edited (or {bbox} when adding)
 const editorMode      = ref('edit')            // 'edit' | 'add'
-const editorAnchor    = ref(null)              // { x, y, side } in wrap-local px
 const editorError     = ref('')
 const editorBusy      = ref(false)
 const drawStart       = ref(null)              // { nx, ny } image-normalised
@@ -458,51 +454,6 @@ function mouseToNormalised(e) {
   }
 }
 
-/**
- * Editor anchor in viewport coords (the editor uses position:fixed via
- * <Teleport>). Default placement is to the right of the bbox, top-aligned;
- * if that overflows the viewport we flip to the left side, and finally pin
- * to the visible edge if neither side has room. y is also clamped so the
- * editor never starts off-screen.
- */
-function bboxAnchor(det) {
-  const wrap = wrapRef.value
-  const { w: bw, h: bh } = baseSize.value
-  if (!wrap || !bw || !bh) return null
-  const wrapRect = wrap.getBoundingClientRect()
-  const [x, y, w] = det.bbox
-  const baseX = (wrap.clientWidth  - bw) / 2
-  const baseY = (wrap.clientHeight - bh) / 2
-  const boxLeft  = wrapRect.left + baseX + panX.value + x       * bw * zoom.value
-  const boxRight = wrapRect.left + baseX + panX.value + (x + w) * bw * zoom.value
-  const boxTop   = wrapRect.top  + baseY + panY.value + y       * bh * zoom.value
-
-  // Approximate dimensions used for clamping. The editor caps its real height
-  // via max-height/overflow so being a bit pessimistic here is fine.
-  const POPOVER_W = 304
-  const POPOVER_H = 480
-  const M = 8
-
-  // Horizontal: prefer right of the box, fall back to left, finally pin to
-  // viewport edge so the editor never extends past the screen.
-  let xPos
-  if (boxRight + M + POPOVER_W <= window.innerWidth - M) {
-    xPos = boxRight + M
-  } else if (boxLeft - M - POPOVER_W >= M) {
-    xPos = boxLeft - M - POPOVER_W
-  } else {
-    xPos = Math.max(M, window.innerWidth - POPOVER_W - M)
-  }
-
-  // Vertical: top-align with the box, but clamp so the bottom edge stays in
-  // view. The editor scrolls internally if it can't fit even at y=M.
-  let yPos = boxTop
-  const maxY = window.innerHeight - POPOVER_H - M
-  if (yPos > maxY) yPos = maxY
-  if (yPos < M)    yPos = M
-
-  return { x: xPos, y: yPos }
-}
 
 /** Style object for an in-progress draw rectangle (image-norm → screen px). */
 const drawRectStyle = computed(() => {
@@ -536,13 +487,11 @@ function openEditorForDet(det) {
   if (!editMode.value) return
   editingDet.value = det
   editorMode.value = 'edit'
-  editorAnchor.value = bboxAnchor(det)
   editorError.value = ''
 }
 
 function closeEditor() {
   editingDet.value = null
-  editorAnchor.value = null
   editorError.value = ''
   editorBusy.value = false
 }
@@ -671,7 +620,6 @@ function onDrawUp(e) {
   // Open editor pre-loaded with the drawn bbox; commit happens on Save.
   editingDet.value = { bbox: [x, y, w, h] }
   editorMode.value = 'add'
-  editorAnchor.value = bboxAnchor({ bbox: [x, y, w, h] })
 }
 
 /**
@@ -914,15 +862,6 @@ watch(() => props.image, () => {
   loadExif()
 }, { immediate: true })
 
-// Keep the editor popover glued to its bbox when the user pans/zooms the
-// image. Without this, the popover stays at its open-time position while
-// the box drifts away underneath it.
-watch(
-  () => [zoom.value, panX.value, panY.value, baseSize.value.w, baseSize.value.h],
-  () => {
-    if (editingDet.value) editorAnchor.value = bboxAnchor(editingDet.value)
-  },
-)
 </script>
 
 <style scoped>
