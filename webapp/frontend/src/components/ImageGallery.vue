@@ -26,9 +26,9 @@
           <div class="gallery__badge-row">
             <span
               v-for="det in detectionCounts(img)"
-              :key="det.label"
-              :class="`badge badge--${det.label}`"
-            >{{ det.label +": " }} {{ det.count}} </span>
+              :key="`${det.category}|${det.name}`"
+              :class="`badge badge--${det.category}`"
+            >{{ capitalize(det.name) }}: {{ det.count }}</span>
           </div>
         </button>
         <button
@@ -77,14 +77,25 @@ function formatTime(d) {
 // category key matches CSS badge classes: animal / human / vehicle
 const CATEGORY_LABEL = { '1': 'animal', '2': 'human', '3': 'vehicle' }
 
+function capitalize(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
+}
+
+// One badge per (category, species) pair. Animal detections fall back to the
+// generic "animal" name when they have no species label; human/vehicle use
+// the category itself since they aren't speciated.
 function detectionCounts(img) {
-  const counts = {}
+  const counts = new Map()
   for (const det of img.detections ?? []) {
     if (det.conf < 0.7) continue
-    const label = CATEGORY_LABEL[det.category] ?? det.label
-    counts[label] = (counts[label] ?? 0) + 1
+    const category = CATEGORY_LABEL[det.category] ?? 'unknown'
+    const name = (category === 'animal' && det.label) ? det.label : category
+    const key = `${category}|${name}`
+    const existing = counts.get(key)
+    if (existing) existing.count++
+    else counts.set(key, { name, category, count: 1 })
   }
-  return Object.entries(counts).map(([label, count]) => ({ label, count }))
+  return [...counts.values()]
 }
 </script>
 
