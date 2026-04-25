@@ -106,6 +106,21 @@ function detectionCounts(img) {
   gap: 4px;
 }
 
+@media (max-width: 600px) {
+  .gallery {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Touch devices have no hover, so the delete button would be permanently
+   hidden. Surface it persistently — at lower opacity so it doesn't dominate
+   the tile until tapped. */
+@media (hover: none) {
+  .gallery__delete {
+    opacity: 0.85;
+  }
+}
+
 .gallery__header {
   grid-column: 1 / -1;
   display: flex;

@@ -549,6 +549,7 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   width: min(520px, 100%);
+  max-height: calc(100vh - 32px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -561,6 +562,7 @@ onUnmounted(() => {
   padding: 14px 18px;
   border-bottom: 1px solid var(--border);
   background: var(--surface2);
+  flex-shrink: 0;
 }
 
 .modal__title { font-size: 15px; font-weight: 700; }
@@ -588,6 +590,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .modal__error {

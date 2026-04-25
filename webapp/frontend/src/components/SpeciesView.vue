@@ -353,6 +353,28 @@ function formatTimestamp(ts) {
   min-height: 0;
 }
 
+@media (max-width: 720px) {
+  .species-view {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 8px;
+  }
+  .species-view__tree {
+    max-height: 30vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border, #e0e0e0);
+    padding: 4px 0 8px 0;
+  }
+  .species-card__crop {
+    width: 140px;
+  }
+  .species-card__crop > img:first-of-type,
+  .species-card__crop-bbox,
+  .species-card__crop-placeholder {
+    height: 100px;
+  }
+}
+
 .species-view__tree {
   overflow-y: auto;
   border-right: 1px solid var(--border, #e0e0e0);
@@ -433,10 +455,12 @@ function formatTimestamp(ts) {
   display: flex;
   gap: 12px;
   align-items: stretch;
+  flex-wrap: wrap;
 }
 
 .species-card__histogram {
-  flex: 0 0 420px;
+  flex: 1 1 420px;
+  min-width: 0;
   display: flex;
   flex-direction: row;
   gap: 12px;
