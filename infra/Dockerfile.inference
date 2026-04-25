@@ -45,6 +45,14 @@ RUN python -m pip install --no-cache-dir -r requirements.txt \
     && find "$SITE" -type d -name 'tests' -prune -exec rm -rf {} + \
     && find "$SITE" -name '*.pyc' -delete
 
+# Bake the SpeciesNet model into the image. Each cold-started container
+# already pays the image pull, so amortizing the model bytes there beats
+# downloading them from Kaggle Hub (or reading them through GCS FUSE) on
+# every job. See infra/inference/prefetch_models.py for what's fetched.
+ENV KAGGLEHUB_CACHE=/opt/kagglehub
+COPY prefetch_models.py ./
+RUN python prefetch_models.py && rm prefetch_models.py
+
 COPY job.py ./
 
 ENTRYPOINT ["python", "job.py"]

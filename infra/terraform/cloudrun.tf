@@ -109,25 +109,21 @@ resource "google_cloud_run_v2_job" "inference" {
   ]
 }
 
-# GPU config and v2-only fields (GCS volume, mount, KAGGLEHUB_CACHE env) are
-# applied via gcloud after every job create or update. The Terraform google
-# provider's in-place updates use the v1 (Knative) API view, which silently
-# drops v2-only fields like GCS volumes — so we treat this provisioner as
-# the source of truth for everything Cloud Run-Job-specific that doesn't
-# round-trip cleanly through the provider.
+# GPU config isn't yet exposed through the Terraform provider schema, so we
+# re-assert it via gcloud after every job create or update.
+#
+# --no-gpu-zonal-redundancy is the only valid setting for GPU jobs today:
+# "Currently Cloud Run jobs are unable to offer GPU enabled instances with
+# zonal redundancy due to capacity limitations."
+# https://cloud.google.com/run/docs/configuring/jobs/gpu#zonal-redundancy
 resource "terraform_data" "inference_gpu" {
   triggers_replace = [
     google_cloud_run_v2_job.inference.id,
     var.inference_image,
-    google_storage_bucket.model_cache.name,
   ]
 
   provisioner "local-exec" {
-    # NOTE: --no-gpu-zonal-redundancy is not optional for GPU jobs.
-    # Per Google's error: "Currently Cloud Run jobs are unable to offer
-    # GPU enabled instances with zonal redundancy due to capacity
-    # limitations." See https://cloud.google.com/run/docs/configuring/jobs/gpu#zonal-redundancy
-    command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --execution-environment=gen2 --no-gpu-zonal-redundancy --update-env-vars=KAGGLEHUB_CACHE=/mnt/model-cache --clear-volumes --clear-volume-mounts --add-volume=name=model-cache,type=cloud-storage,bucket=${google_storage_bucket.model_cache.name} --add-volume-mount=volume=model-cache,mount-path=/mnt/model-cache --region=${var.region} --project=${var.project_id}"
+    command = "gcloud beta run jobs update ${google_cloud_run_v2_job.inference.name} --gpu=1 --gpu-type=nvidia-l4 --execution-environment=gen2 --no-gpu-zonal-redundancy --clear-volumes --clear-volume-mounts --region=${var.region} --project=${var.project_id}"
   }
 
   depends_on = [google_cloud_run_v2_job.inference]
