@@ -55,6 +55,22 @@ def _extract_taken_at_from_bytes(data: bytes) -> str | None:
         return None
 
 
+# EXIF in a JPEG lives in the APP1 marker right after SOI, almost always
+# within the first few tens of KB. Range-download a prefix instead of
+# pulling the whole image — typically 100x faster on multi-MB photos.
+_PREFIX_BYTES = 256 * 1024
+
+
+def _download_for_exif(blob) -> bytes | None:
+    try:
+        return blob.download_as_bytes(start=0, end=_PREFIX_BYTES - 1)
+    except Exception:
+        try:
+            return blob.download_as_bytes()
+        except Exception:
+            return None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--uid", help="Only backfill this user's predictions")
@@ -79,7 +95,11 @@ def main():
 
     for user_ref in user_refs:
         uid = user_ref.id
-        for doc in user_ref.collection("predictions").stream():
+        # Materialise the snapshot list so the streaming gRPC closes before
+        # we do per-doc GCS work (otherwise the cursor hits DEADLINE_EXCEEDED).
+        docs = list(user_ref.collection("predictions").stream())
+        print(f"[user] {uid}: {len(docs)} prediction(s)", flush=True)
+        for doc in docs:
             total += 1
             data = doc.to_dict()
             if data.get("taken_at") and not args.overwrite:
@@ -87,21 +107,27 @@ def main():
                 continue
             gcs_path = data.get("gcs_path") or data.get("filepath")
             if not gcs_path:
-                print(f"[err]  {uid}/{doc.id}: no gcs_path")
+                print(f"[err]  {uid}/{doc.id}: no gcs_path", flush=True)
                 errors += 1
                 continue
-            try:
-                blob_bytes = bucket.blob(gcs_path).download_as_bytes()
-            except Exception as exc:
-                print(f"[err]  {uid}/{gcs_path}: download failed: {exc}")
+            blob_bytes = _download_for_exif(bucket.blob(gcs_path))
+            if blob_bytes is None:
+                print(f"[err]  {uid}/{gcs_path}: download failed", flush=True)
                 errors += 1
                 continue
             taken_at = _extract_taken_at_from_bytes(blob_bytes)
+            # If the prefix wasn't enough (unusual), retry with full file.
+            if not taken_at and len(blob_bytes) >= _PREFIX_BYTES:
+                try:
+                    blob_bytes = bucket.blob(gcs_path).download_as_bytes()
+                    taken_at = _extract_taken_at_from_bytes(blob_bytes)
+                except Exception:
+                    pass
             if not taken_at:
                 no_exif += 1
-                print(f"[skip] {uid}/{gcs_path}: no EXIF date")
+                print(f"[skip] {uid}/{gcs_path}: no EXIF date", flush=True)
                 continue
-            print(f"[ok]   {uid}/{gcs_path}: {taken_at}")
+            print(f"[ok]   {uid}/{gcs_path}: {taken_at}", flush=True)
             if not args.dry_run:
                 doc.reference.update({"taken_at": taken_at})
             updated += 1
