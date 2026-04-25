@@ -8,7 +8,10 @@ Environment variables:
                         e.g. projects/trackcam-viewer/locations/us-east4/jobs/speciesnet-inference
 """
 import hashlib
+import json
 import os
+import urllib.parse
+import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,7 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from google.cloud import firestore, storage
 from google.cloud import run_v2
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, conlist, confloat
 
 # ── App + GCP clients ─────────────────────────────────────────────────────────
 app = FastAPI(title="TrackCam Viewer API")
@@ -106,6 +109,16 @@ async def get_predictions(uid: str = Depends(verify_token)):
         d = doc.to_dict()
         # Normalise: frontend uses 'filepath' as the image path key
         d.setdefault("filepath", d.get("gcs_path", ""))
+        # Backfill stable UUIDs on detections so the manual-edit UI can
+        # address them. Idempotent — only writes back if anything was missing.
+        detections = d.get("detections") or []
+        mutated = False
+        for det in detections:
+            if "id" not in det:
+                det["id"] = uuid.uuid4().hex
+                mutated = True
+        if mutated:
+            doc.reference.update({"detections": detections})
         predictions.append(d)
     return {"predictions": predictions}
 
@@ -336,6 +349,262 @@ def _safe_folder(name: str) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# ── Per-detection edits (Firestore-backed) ───────────────────────────────────
+#
+# Mirror of the local-backend endpoints in main.py. Detections live as an
+# array on the prediction doc (users/{uid}/predictions/{md5(gcs_path)}); each
+# mutation is a read-modify-write on that single doc. Single-user assumption
+# is fine here — concurrent-edit considerations are tracked in issue #13.
+
+VALID_CATEGORIES = {"1", "2", "3"}
+
+
+class DetectionCreate(BaseModel):
+    """Schema for adding a manual detection to an image."""
+    category: str = Field(..., description="'1' animal, '2' human, '3' vehicle")
+    label: str
+    bbox: conlist(confloat(ge=0.0, le=1.0), min_length=4, max_length=4)
+    conf: confloat(ge=0.0, le=1.0) = 1.0
+    scientific: Optional[str] = None
+
+    def model_post_init(self, __context) -> None:
+        if self.category not in VALID_CATEGORIES:
+            raise ValueError(f"category must be one of {sorted(VALID_CATEGORIES)}")
+
+
+class DetectionPatch(BaseModel):
+    """Partial update — any field may be omitted to leave it unchanged."""
+    category: Optional[str] = None
+    label: Optional[str] = None
+    conf: Optional[confloat(ge=0.0, le=1.0)] = None
+    scientific: Optional[str] = None
+
+    def model_post_init(self, __context) -> None:
+        if self.category is not None and self.category not in VALID_CATEGORIES:
+            raise ValueError(f"category must be one of {sorted(VALID_CATEGORIES)}")
+
+
+def _prediction_doc_ref(uid: str, path: str):
+    """Locate the Firestore doc for a given user + GCS path."""
+    doc_id = hashlib.md5(path.encode()).hexdigest()
+    return _db.collection("users").document(uid).collection("predictions").document(doc_id)
+
+
+def _ensure_path_owned(uid: str, path: str) -> None:
+    if not path.startswith(f"images/{uid}/"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+
+def _load_detections(uid: str, path: str):
+    """Return (doc_ref, prediction_dict, detections_list). 404 on miss."""
+    doc_ref = _prediction_doc_ref(uid, path)
+    snap = doc_ref.get()
+    if not snap.exists:
+        raise HTTPException(status_code=404, detail="No prediction for that path")
+    data = snap.to_dict()
+    return doc_ref, data, (data.get("detections") or [])
+
+
+@app.delete("/api/predictions/detections")
+async def delete_detection(
+    path: str = Query(..., description="GCS path of the image"),
+    id:   str = Query(..., description="Detection id"),
+    uid:  str = Depends(verify_token),
+):
+    _ensure_path_owned(uid, path)
+    doc_ref, _data, detections = _load_detections(uid, path)
+    new_dets = [d for d in detections if d.get("id") != id]
+    if len(new_dets) == len(detections):
+        raise HTTPException(status_code=404, detail="Detection not found")
+    doc_ref.update({"detections": new_dets})
+    return {"deleted": True, "id": id}
+
+
+@app.patch("/api/predictions/detections")
+async def patch_detection(
+    patch: DetectionPatch,
+    path:  str = Query(...),
+    id:    str = Query(...),
+    uid:   str = Depends(verify_token),
+):
+    """Update category / label / confidence on an existing detection. Marks
+    the detection `manual: true` since a human touched it. Bbox is not
+    editable here — to move a box, delete + redraw."""
+    _ensure_path_owned(uid, path)
+    doc_ref, _data, detections = _load_detections(uid, path)
+    target = None
+    for det in detections:
+        if det.get("id") == id:
+            target = det
+            break
+    if target is None:
+        raise HTTPException(status_code=404, detail="Detection not found")
+    if patch.category   is not None: target["category"]   = patch.category
+    if patch.label      is not None: target["label"]      = patch.label
+    if patch.conf       is not None: target["conf"]       = float(patch.conf)
+    if patch.scientific is not None: target["scientific"] = patch.scientific
+    target["manual"] = True
+    doc_ref.update({"detections": detections})
+    return {"updated": True, "detection": target}
+
+
+@app.post("/api/predictions/detections", status_code=201)
+async def add_detection(
+    body: DetectionCreate,
+    path: str = Query(..., description="GCS path of the image"),
+    uid:  str = Depends(verify_token),
+):
+    _ensure_path_owned(uid, path)
+    doc_ref, _data, detections = _load_detections(uid, path)
+    det = {
+        "id":       uuid.uuid4().hex,
+        "category": body.category,
+        "label":    body.label,
+        "bbox":     list(body.bbox),
+        "conf":     float(body.conf),
+        "manual":   True,
+    }
+    if body.scientific:
+        det["scientific"] = body.scientific
+    detections.append(det)
+    doc_ref.update({"detections": detections})
+    return {"created": True, "detection": det}
+
+
+# ── Custom species (Firestore-backed) ────────────────────────────────────────
+# Stored under users/{uid}/species_custom/{lowercased common_name} so the
+# document id provides natural de-duplication.
+
+class CustomSpecies(BaseModel):
+    common_name: str
+    scientific:  Optional[str] = None
+    parent:      Optional[str] = None  # "class;order;family" hint
+
+
+@app.get("/api/species-custom")
+async def get_custom_species(uid: str = Depends(verify_token)):
+    docs = _db.collection("users").document(uid).collection("species_custom").stream()
+    return {"species": [d.to_dict() for d in docs]}
+
+
+@app.post("/api/species-custom", status_code=201)
+async def add_custom_species(
+    body: CustomSpecies,
+    uid:  str = Depends(verify_token),
+):
+    cn = (body.common_name or "").strip()
+    if not cn:
+        raise HTTPException(status_code=400, detail="common_name is required")
+    doc_id  = cn.lower()
+    doc_ref = _db.collection("users").document(uid).collection("species_custom").document(doc_id)
+    snap    = doc_ref.get()
+    if snap.exists:
+        return {"created": False, "species": snap.to_dict()}
+    entry = {
+        "id":          uuid.uuid4().hex,
+        "common_name": cn,
+        "scientific":  (body.scientific or "").strip(),
+        "parent":      (body.parent or "").strip(),
+    }
+    doc_ref.set(entry)
+    return {"created": True, "species": entry}
+
+
+# ── External taxonomy lookups (GBIF + iNaturalist) ───────────────────────────
+# Free, unauthenticated upstream APIs. Per-process caches keyed by lowercased
+# query keep repeat lookups in one container instance instant. The proxy hides
+# the upstream URL from the browser (CORS + future swap to a different source).
+
+_HTTP_USER_AGENT = "TrailCam-Viewer/0.1 (+https://github.com/dabearic/trackcam-viewer)"
+_GBIF_CACHE: dict = {}
+_INAT_CACHE: dict = {}
+
+
+@app.get("/api/species-lookup")
+def species_lookup(
+    name: str = Query(..., min_length=1, description="Scientific or common name"),
+    uid:  str = Depends(verify_token),
+):
+    """Resolve a species name to its full taxonomy via GBIF's match endpoint."""
+    key = name.strip().lower()
+    if not key:
+        raise HTTPException(status_code=400, detail="name is required")
+    if key in _GBIF_CACHE:
+        return _GBIF_CACHE[key]
+
+    url = "https://api.gbif.org/v1/species/match?" + urllib.parse.urlencode({
+        "name":   name.strip(),
+        "strict": "false",
+    })
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _HTTP_USER_AGENT})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = json.loads(resp.read())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"GBIF lookup failed: {exc}")
+
+    if raw.get("matchType") == "NONE":
+        raise HTTPException(status_code=404, detail=f"No match for '{name}'")
+
+    result = {
+        "kingdom":    raw.get("kingdom", ""),
+        "phylum":     raw.get("phylum", ""),
+        "class":      raw.get("class", ""),
+        "order":      raw.get("order", ""),
+        "family":     raw.get("family", ""),
+        "genus":      raw.get("genus", ""),
+        "species":    raw.get("species", ""),
+        "scientific": raw.get("scientificName") or raw.get("canonicalName") or "",
+        "rank":       raw.get("rank", ""),
+        "match_type": raw.get("matchType", ""),
+        "confidence": raw.get("confidence", 0),
+    }
+    _GBIF_CACHE[key] = result
+    return result
+
+
+@app.get("/api/species-autocomplete")
+def species_autocomplete(
+    q:   str = Query(..., min_length=1, description="Partial common or scientific name"),
+    uid: str = Depends(verify_token),
+):
+    """Autocomplete species names via iNaturalist."""
+    key = q.strip().lower()
+    if not key:
+        raise HTTPException(status_code=400, detail="q is required")
+    if key in _INAT_CACHE:
+        return _INAT_CACHE[key]
+
+    url = "https://api.inaturalist.org/v1/taxa/autocomplete?" + urllib.parse.urlencode({
+        "q":        q.strip(),
+        "rank":     "species",
+        "per_page": 8,
+    })
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _HTTP_USER_AGENT})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = json.loads(resp.read())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"iNaturalist autocomplete failed: {exc}")
+
+    out = {
+        "results": [
+            {
+                "id":          r.get("id"),
+                "name":        r.get("name", ""),
+                "common_name": r.get("preferred_common_name", "") or "",
+                "rank":        r.get("rank", ""),
+                "iconic":      r.get("iconic_taxon_name", ""),
+                "extinct":     bool(r.get("extinct")),
+            }
+            for r in raw.get("results", [])
+            if r.get("rank") == "species" and r.get("name")
+        ],
+    }
+    _INAT_CACHE[key] = out
+    return out
 
 
 # ── Serve Vue SPA (must be last) ──────────────────────────────────────────────
