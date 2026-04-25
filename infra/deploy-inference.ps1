@@ -21,7 +21,7 @@ gcloud beta run jobs update speciesnet-inference `
   --image $IMAGE `
   --gpu=1 --gpu-type=nvidia-l4 `
   --execution-environment=gen2 `
-  --no-gpu-zonal-redundancy `
+  --gpu-zonal-redundancy `
   --region us-east4 `
   --project trackcam-viewer
 if ($LASTEXITCODE -ne 0) { throw "gcloud job update failed" }
