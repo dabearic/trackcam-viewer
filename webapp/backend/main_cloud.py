@@ -174,11 +174,15 @@ async def get_image(
     return RedirectResponse(url, status_code=307)
 
 
-# ── Upload ────────────────────────────────────────────────────────────────────
+# ── Upload + inference kickoff ────────────────────────────────────────────────
 
 class UploadPrepareRequest(BaseModel):
     folder: str
     filenames: list[str]
+    country: Optional[str] = None
+    admin1_region: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 @app.post("/api/upload/prepare")
@@ -186,15 +190,27 @@ async def prepare_upload(
     req: UploadPrepareRequest,
     uid: str = Depends(verify_token),
 ):
-    """Return a signed PUT URL for each filename so the browser can upload directly to GCS."""
+    """Single-shot kickoff for uploads.
+
+    This used to just return signed PUT URLs; the client then separately
+    called /api/process once uploads finished. That put the Cloud Run Job
+    cold-start (30–60s) entirely after the upload phase, where the user
+    could see it.
+
+    Now we do everything here: dedupe against existing predictions, create
+    the job doc, fire run_job, and return the signed URLs alongside the
+    job_id. The container cold-starts while the browser is still uploading,
+    and the inference job.py waits for any missing files in GCS (up to a
+    generous timeout) before proceeding — so the 30–60s cold-start overlaps
+    with the upload time instead of following it.
+    """
     if not req.filenames:
         raise HTTPException(status_code=400, detail="No filenames provided")
 
     folder = _safe_folder(req.folder)
     uploads = []
-
     for raw_name in req.filenames:
-        filename  = Path(raw_name).name  # strip any path component
+        filename = Path(raw_name).name  # strip any path component
         if Path(filename).suffix.lower() not in IMAGE_EXTS:
             continue
         gcs_path = f"images/{uid}/{folder}/{filename}"
@@ -207,49 +223,40 @@ async def prepare_upload(
         )
         uploads.append({"filename": filename, "gcs_path": gcs_path, "url": url})
 
-    return {"uploads": uploads, "folder": folder}
-
-
-# ── Processing jobs ───────────────────────────────────────────────────────────
-
-class ProcessRequest(BaseModel):
-    folder: str
-    gcs_paths: list[str]              # already-uploaded GCS object paths
-    country: Optional[str] = None
-    admin1_region: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-
-
-@app.post("/api/process", status_code=202)
-async def start_process(
-    req: ProcessRequest,
-    uid: str = Depends(verify_token),
-):
-    if not req.gcs_paths:
-        raise HTTPException(status_code=400, detail="No files to process")
-
-    # Deduplicate — skip GCS paths that already have a prediction doc
-    existing = _existing_gcs_paths(uid)
-    new_paths = [p for p in req.gcs_paths if p not in existing]
-    skipped   = len(req.gcs_paths) - len(new_paths)
-
-    if not new_paths:
+    if not uploads:
         return {
-            "job_id": None,
-            "message": f"All {len(req.gcs_paths)} image(s) already processed — nothing to do",
-            "skipped": skipped,
+            "uploads": [], "folder": folder,
+            "job_id": None, "skipped": 0,
+            "message": "No supported image files found",
         }
 
+    # Dedupe — skip GCS paths that already have a prediction doc
+    existing   = _existing_gcs_paths(uid)
+    new_paths  = [u["gcs_path"] for u in uploads if u["gcs_path"] not in existing]
+    skipped    = len(uploads) - len(new_paths)
+    new_upload_set = set(new_paths)
+
+    # Still need to return signed URLs for new files only — the browser
+    # shouldn't bother re-uploading files we'll skip anyway.
+    uploads = [u for u in uploads if u["gcs_path"] in new_upload_set]
+
+    if not uploads:
+        return {
+            "uploads": [], "folder": folder,
+            "job_id": None, "skipped": skipped,
+            "message": f"All {skipped} image(s) already processed — nothing to do",
+        }
+
+    # ── Create job doc and fire run_job NOW, in parallel with uploads ────
     job_id = uuid.uuid4().hex[:8]
     now    = _now()
-
     job_doc = {
         "job_id":  job_id,
         "uid":     uid,
-        "folder":  req.folder,
+        "folder":  folder,
         "status":  "pending",
-        "message": f"Queued — {len(new_paths)} new image(s)" + (f", {skipped} skipped" if skipped else ""),
+        "message": f"Queued — {len(new_paths)} new image(s)"
+                   + (f", {skipped} skipped" if skipped else ""),
         "progress": {},
         "log":     [],
         "files":   new_paths,
@@ -264,11 +271,9 @@ async def start_process(
         "updated_at":   now,
         "completed_at": None,
     }
-
     job_ref = _db.collection("users").document(uid).collection("jobs").document(job_id)
     job_ref.set(job_doc)
 
-    # Trigger Cloud Run Job
     jobs_client = run_v2.JobsClient()
     jobs_client.run_job(
         run_v2.RunJobRequest(
@@ -295,7 +300,12 @@ async def start_process(
         "updated_at": _now(),
     })
 
-    return {"job_id": job_id, "skipped": skipped}
+    return {
+        "uploads":  uploads,
+        "folder":   folder,
+        "job_id":   job_id,
+        "skipped":  skipped,
+    }
 
 
 @app.get("/api/jobs/{job_id}")
