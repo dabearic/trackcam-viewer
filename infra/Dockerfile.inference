@@ -55,4 +55,8 @@ RUN python prefetch_models.py && rm prefetch_models.py
 
 COPY job.py ./
 
-ENTRYPOINT ["python", "job.py"]
+# -u disables stdout buffering so set_status() prints land in Cloud Logging
+# at their actual time rather than bunched at process exit. Phase timing is
+# the only way to tell where a slow run is spending its wall-clock — without
+# this, every job.py log line in a batch shows the same flush timestamp.
+ENTRYPOINT ["python", "-u", "job.py"]
