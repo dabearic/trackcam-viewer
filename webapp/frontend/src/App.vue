@@ -43,6 +43,12 @@
         >Species</button>
       </div>
       <div class="app-header__right">
+        <button
+          v-if="view === 'gallery'"
+          class="app-header__filter-toggle"
+          :class="{ 'app-header__filter-toggle--active': filtersOpen }"
+          @click="filtersOpen = !filtersOpen"
+        >Filters</button>
         <button class="app-header__process-btn" @click="showProcess = true">+ Add Photos</button>
         <button v-if="currentUser" class="app-header__user-btn" :title="`Sign out ${currentUser.email}`" @click="handleSignOut">
           <img v-if="currentUser.photoURL" :src="currentUser.photoURL" class="app-header__avatar" referrerpolicy="no-referrer" />
@@ -51,7 +57,7 @@
       </div>
     </header>
 
-    <div class="app-body">
+    <div class="app-body" :class="{ 'app-body--filters-open': filtersOpen }">
       <FilterBar
         v-if="view === 'gallery'"
         :species="allSpecies"
@@ -151,6 +157,7 @@ const error        = ref(null)
 const selectedImage = ref(null)
 const selectedDay  = ref(null)
 const showProcess  = ref(false)
+const filtersOpen  = ref(false)
 const view         = ref('species')  // 'gallery' | 'species'
 const dataDateFrom = ref('')
 const dataDateTo   = ref('')
@@ -606,6 +613,24 @@ onMounted(() => {
 
 .app-header__process-btn:hover { background: #166534; }
 
+.app-header__filter-toggle {
+  display: none;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.app-header__filter-toggle--active {
+  background: var(--accent, #2d7d46);
+  color: white;
+  border-color: var(--accent, #2d7d46);
+}
+
 .app-header__user-btn {
   background: none;
   border: 1px solid var(--border);
@@ -723,5 +748,33 @@ onMounted(() => {
 
 .confirm__btn--danger:hover:not(:disabled) {
   background: #991b1b;
+}
+
+/* ── Narrow viewports (portrait phones) ─────────────────────────────────────
+   The FilterBar's 220px sidebar leaves almost no room for the gallery on a
+   portrait phone, so collapse it into a togglable drawer above the gallery.
+   The "Filters" button in the header is hidden on wide screens — there the
+   sidebar is always visible. */
+@media (max-width: 720px) {
+  .app-header {
+    padding: 10px 12px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .app-header__stats { display: none; }
+  .app-header__filter-toggle { display: inline-block; }
+
+  .app-body { flex-direction: column; }
+  .app-body :deep(.filterbar) {
+    width: 100%;
+    max-height: 50vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    display: none;
+  }
+  .app-body--filters-open :deep(.filterbar) {
+    display: flex;
+  }
+  .app-main { padding: 10px; }
 }
 </style>

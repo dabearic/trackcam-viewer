@@ -242,6 +242,10 @@ def main():
             set_status("error", f"SpeciesNet exited with code {process.returncode}")
             raise SystemExit(1)
 
+        # Marker so phase timing in Cloud Logging shows speciesnet end ≠
+        # crop/firestore work (the existing set_status calls already mark
+        # the start of each downstream phase).
+        set_status("running", "SpeciesNet complete — building crops…")
         with open(predictions_file, encoding="utf-8") as f:
             output = json.load(f)
 
