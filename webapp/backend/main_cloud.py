@@ -288,7 +288,7 @@ async def prepare_upload(
     job_ref.set(job_doc)
 
     jobs_client = run_v2.JobsClient()
-    jobs_client.run_job(
+    op = jobs_client.run_job(
         run_v2.RunJobRequest(
             name=INFERENCE_JOB_NAME,
             overrides=run_v2.RunJobRequest.Overrides(
@@ -304,6 +304,17 @@ async def prepare_upload(
         )
     )
 
+    # Capture the Execution resource name so the watchdog (see
+    # _reconcile_failed_execution) can ask Cloud Run whether a stale
+    # "running" doc actually corresponds to a crashed container — covers
+    # crashes that happen before job.py reaches its first set_status call.
+    execution_name = ""
+    try:
+        if op.metadata is not None:
+            execution_name = op.metadata.name or ""
+    except Exception:
+        pass
+
     # Move the job off "pending / Queued" right away so the polling UI sees a
     # new message instead of sitting silent during container cold-start. The
     # inference container will overwrite this as soon as main() starts.
@@ -311,6 +322,7 @@ async def prepare_upload(
         "status":  "running",
         "message": "Loading AI model (can take up to a minute)…",
         "updated_at": _now(),
+        "execution_name": execution_name,
     })
 
     return {
@@ -323,14 +335,16 @@ async def prepare_upload(
 
 @app.get("/api/jobs/{job_id}")
 async def get_job(job_id: str, uid: str = Depends(verify_token)):
-    doc = (
+    doc_ref = (
         _db.collection("users").document(uid)
         .collection("jobs").document(job_id)
-        .get()
     )
-    if not doc.exists:
+    snap = doc_ref.get()
+    if not snap.exists:
         raise HTTPException(status_code=404, detail="Job not found")
-    return doc.to_dict()
+    data = snap.to_dict()
+    reconciled = _reconcile_failed_execution(doc_ref, data)
+    return reconciled or data
 
 
 @app.get("/api/jobs")
@@ -359,6 +373,77 @@ def _safe_folder(name: str) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# ── Execution watchdog ───────────────────────────────────────────────────────
+#
+# If the inference container crashes before reaching its first set_status()
+# call (syntax error at import time, image pull failure, OOM during torch
+# import, missing env var…), Cloud Run marks the execution Failed but the
+# Firestore job doc stays on the "Loading AI model…" placeholder forever.
+# On every poll of GET /api/jobs/{id} we ask Cloud Run whether the execution
+# has finished, and flip status to "error" if it failed. Issue #25.
+
+# Only consult Cloud Run if the doc hasn't been touched for this long. Cold
+# start is 30–60s, so going below ~60s would just spend API calls during
+# normal cold-starts. Setting it well under any realistic phase duration
+# means a crash mid-cold-start is detected within ~30s of the container exit.
+_WATCHDOG_STALENESS_S = 60
+
+_executions_client: Optional[run_v2.ExecutionsClient] = None
+
+
+def _get_executions_client() -> run_v2.ExecutionsClient:
+    global _executions_client
+    if _executions_client is None:
+        _executions_client = run_v2.ExecutionsClient()
+    return _executions_client
+
+
+def _reconcile_failed_execution(doc_ref, data: dict) -> Optional[dict]:
+    """If the doc claims `running` but Cloud Run reports the execution
+    finished and failed, flip the doc to `error` and return the updated dict.
+    Returns None when no change is needed."""
+    if data.get("status") != "running":
+        return None
+    execution_name = data.get("execution_name")
+    if not execution_name:
+        return None
+
+    raw = data.get("updated_at")
+    try:
+        updated_at = datetime.fromisoformat(raw) if isinstance(raw, str) else None
+    except ValueError:
+        updated_at = None
+    if updated_at is None:
+        return None
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    if (datetime.now(timezone.utc) - updated_at).total_seconds() < _WATCHDOG_STALENESS_S:
+        return None
+
+    try:
+        execution = _get_executions_client().get_execution(name=execution_name)
+    except Exception:
+        return None
+
+    # completion_time is a google.protobuf.Timestamp; unset → falsy seconds.
+    if not execution.completion_time or not execution.completion_time.seconds:
+        return None
+
+    # Cloud Run sets succeeded_count > 0 only on a clean exit. Treat anything
+    # else as a failure — the container exited without flipping the doc itself.
+    if execution.succeeded_count and not execution.failed_count:
+        return None
+
+    update = {
+        "status":       "error",
+        "message":      "Inference container exited without reporting status — check Cloud Run logs.",
+        "updated_at":   _now(),
+        "completed_at": _now(),
+    }
+    doc_ref.update(update)
+    return {**data, **update}
 
 
 # ── Per-detection edits (Firestore-backed) ───────────────────────────────────
