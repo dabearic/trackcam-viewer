@@ -14,6 +14,7 @@ import re
 import subprocess
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +24,13 @@ from PIL import Image, ImageOps
 CROP_CONF_THRESHOLD = 0.2
 CROP_MAX_DIM        = 512
 CROP_JPEG_QUALITY   = 85
+
+# GCS round-trip latency (~50-200ms per blob) dominates large-batch wall
+# time — sequential I/O made a 513-image run take ~14 minutes on top of
+# inference. 16 workers cuts that to single-digit minutes without
+# pressuring the per-instance memory budget.
+DOWNLOAD_WORKERS = 16
+UPLOAD_WORKERS   = 16
 
 # The web backend fires run_job at upload-prepare time, so the container
 # often starts cold-starting BEFORE the browser has finished PUT-ing all
@@ -146,17 +154,27 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # ── Download images from GCS ──────────────────────────────────────────
-        local_paths = []
+        # Sequential downloads were the dominant cost on large batches:
+        # GCS round-trip latency (~50-200ms) stacked across 500 blobs is
+        # several minutes. Parallelize so wall time scales by total bytes
+        # rather than blob count.
+        local_paths: list[str] = []
         path_map: dict[str, str] = {}  # local_path -> gcs_path
 
-        for i, gcs_path in enumerate(files):
+        def _download_one(gcs_path: str) -> tuple[str, str]:
             filename   = Path(gcs_path).name
             local_path = os.path.join(tmpdir, filename)
             bucket.blob(gcs_path).download_to_filename(local_path)
-            local_paths.append(local_path)
-            path_map[local_path] = gcs_path
-            if (i + 1) % 20 == 0 or (i + 1) == len(files):
-                set_status("running", f"Downloaded {i+1}/{len(files)} images…")
+            return gcs_path, local_path
+
+        with ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as ex:
+            done = 0
+            for gcs_path, local_path in ex.map(_download_one, files):
+                local_paths.append(local_path)
+                path_map[local_path] = gcs_path
+                done += 1
+                if done % 20 == 0 or done == len(files):
+                    set_status("running", f"Downloaded {done}/{len(files)} images…")
 
         # ── Build instances JSON ──────────────────────────────────────────────
         instances = []
@@ -228,18 +246,69 @@ def main():
         # crop/firestore work (the existing set_status calls already mark
         # the start of each downstream phase).
         set_status("running", "SpeciesNet complete — building crops…")
+        with open(predictions_file, encoding="utf-8") as f:
+            output = json.load(f)
+
+        folder = job_doc.get("folder", "")
+
+        # ── Generate crops (CPU) then upload in parallel (I/O) ────────────────
+        # Splitting these phases lets us serialize the cheap PIL work and
+        # batch the slow GCS round-trips into a thread pool — same trick
+        # the download loop above uses, applied to the larger of the two
+        # write paths (one upload per detection above the conf threshold).
+        crop_jobs: list[tuple[str, str, dict]] = []  # (local_path, gcs_path, det)
+        for pred in output.get("predictions", []):
+            local_fp = pred["filepath"]
+            gcs_path = path_map.get(local_fp, local_fp)
+            filename = Path(gcs_path).name
+            detections = pred.get("detections", [])
+            source_image = None
+            for idx, det in enumerate(detections):
+                if det.get("conf", 0) < CROP_CONF_THRESHOLD or not det.get("bbox"):
+                    continue
+                if source_image is None:
+                    try:
+                        # Apply EXIF orientation so portrait-mode photos crop
+                        # in the orientation the browser displays them in.
+                        # Without this, crops come out 90°/180° rotated for
+                        # any image whose camera embedded a non-default
+                        # Orientation tag (very common on trail cams).
+                        source_image = ImageOps.exif_transpose(Image.open(local_fp))
+                    except Exception as exc:
+                        log.append(f"crop: could not open {local_fp}: {exc}")
+                        break
+                stem = Path(filename).stem
+                crop_filename = f"{stem}_detection_{idx + 1}.jpg"
+                crop_local = os.path.join(tmpdir, crop_filename)
+                try:
+                    _save_crop(source_image, det["bbox"], crop_local)
+                except Exception as exc:
+                    log.append(f"crop: failed for {filename} det {idx}: {exc}")
+                    continue
+                crop_gcs_path = f"crops/{uid}/{folder}/{crop_filename}"
+                crop_jobs.append((crop_local, crop_gcs_path, det))
+            if source_image is not None:
+                source_image.close()
+
+        if crop_jobs:
+            set_status("running", f"Uploading {len(crop_jobs)} crop(s)…")
+
+            def _upload_crop(job: tuple[str, str, dict]) -> None:
+                local, remote, det = job
+                bucket.blob(remote).upload_from_filename(local, content_type="image/jpeg")
+                det["crop_gcs_path"] = remote
+
+            with ThreadPoolExecutor(max_workers=UPLOAD_WORKERS) as ex:
+                for _ in ex.map(_upload_crop, crop_jobs):
+                    pass
 
         # ── Write predictions to Firestore ────────────────────────────────────
         set_status("running", "Saving predictions to database…")
-
-        with open(predictions_file, encoding="utf-8") as f:
-            output = json.load(f)
 
         batch = db.batch()
         batch_count = 0
         count = 0
         now = _now()
-        folder = job_doc.get("folder", "")
 
         # Summary data shown in the upload dialog when the job completes.
         # Category names mirror the gallery badges (animal/human/vehicle/blank).
@@ -267,36 +336,6 @@ def main():
                     top5.append({**_parse_label(cls), "score": round(score, 4)})
 
             detections = pred.get("detections", [])
-            source_image = None
-            for idx, det in enumerate(detections):
-                if det.get("conf", 0) < CROP_CONF_THRESHOLD or not det.get("bbox"):
-                    continue
-                if source_image is None:
-                    try:
-                        # Apply EXIF orientation so portrait-mode photos crop
-                        # in the orientation the browser displays them in.
-                        # Without this, crops come out 90°/180° rotated for
-                        # any image whose camera embedded a non-default
-                        # Orientation tag (very common on trail cams).
-                        source_image = ImageOps.exif_transpose(Image.open(local_fp))
-                    except Exception as exc:
-                        log.append(f"crop: could not open {local_fp}: {exc}")
-                        break
-                stem = Path(filename).stem
-                crop_filename = f"{stem}_detection_{idx + 1}.jpg"
-                crop_local = os.path.join(tmpdir, crop_filename)
-                try:
-                    _save_crop(source_image, det["bbox"], crop_local)
-                except Exception as exc:
-                    log.append(f"crop: failed for {filename} det {idx}: {exc}")
-                    continue
-                crop_gcs_path = f"crops/{uid}/{folder}/{crop_filename}"
-                bucket.blob(crop_gcs_path).upload_from_filename(
-                    crop_local, content_type="image/jpeg"
-                )
-                det["crop_gcs_path"] = crop_gcs_path
-            if source_image is not None:
-                source_image.close()
 
             doc = {
                 "gcs_path":          gcs_path,
