@@ -92,6 +92,7 @@
               v-show="imageLoaded"
               :src="imageUrl(image.filepath)"
               :alt="image.filename"
+              :style="filterStyleText.value"
               class="modal__img"
               draggable="false"
               @load="onImageLoad"
@@ -183,6 +184,10 @@
         <!-- Side panel -->
         <div class="modal__panel">
           <!-- Prediction summary -->
+          <section class="panel__section">
+            <h3 class="panel__heading">Image Adjustment</h3>
+            <FiltersBox :filterTypes="filterTypes" @styles-update="filterStyleText.value=$event"/>
+          </section>
           <section class="panel__section">
             <h3 class="panel__heading">Prediction</h3>
             <div v-if="image.prediction" class="panel__prediction">
@@ -284,6 +289,7 @@ import DetectionCrop from './DetectionCrop.vue'
 import DetectionEditor from './DetectionEditor.vue'
 import { imageUrl, apiFetch } from '../firebase.js'
 import { useSpeciesCatalog } from '../composables/useSpeciesCatalog.js'
+import FiltersBox from "./FiltersBox.vue";
 
 const props = defineProps({
   image: Object,
@@ -311,6 +317,9 @@ const drawEnd         = ref(null)
 const predictionsRef  = computed(() => props.predictions)
 const speciesCatalog  = useSpeciesCatalog(predictionsRef)
 const { topFive: topFiveFor, flatSpecies, addCustom, loadCustom } = speciesCatalog
+
+const filterTypes = ref(['contrast', 'saturate'])
+const filterStyleText = ref({filter: 'contrast(1.8)'})
 
 function cancelDelete() {
   if (deleting.value) return
