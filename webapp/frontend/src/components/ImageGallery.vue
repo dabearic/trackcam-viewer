@@ -28,7 +28,7 @@
               v-for="det in detectionCounts(img)"
               :key="`${det.category}|${det.name}`"
               :class="`badge badge--${det.category}`"
-            >{{ capitalize(det.name) }}: {{ det.count }}</span>
+            >{{ det.name }}: {{ det.count }}</span>
           </div>
         </button>
         <button
@@ -87,9 +87,12 @@ function capitalize(s) {
 function detectionCounts(img) {
   const counts = new Map()
   for (const det of img.detections ?? []) {
-    if (det.conf < 0.7) continue
+    if (det.conf < 0.3) continue
+      console.log(img.prediction.common_name + ": " + img.prediction.score)
     const category = CATEGORY_LABEL[det.category] ?? 'unknown'
-    const name = (category === 'animal' && det.label) ? det.label : category
+    let name = (category === 'animal' && det.label) ? det.label : category
+    if(category === 'animal' && img.prediction && img.prediction.common_name && img.prediction.common_name !== 'human')
+      name = img.prediction.common_name
     const key = `${category}|${name}`
     const existing = counts.get(key)
     if (existing) existing.count++
