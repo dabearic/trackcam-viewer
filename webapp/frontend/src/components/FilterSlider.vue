@@ -1,5 +1,5 @@
 <script setup>
-  import {ref, computed, watch, capitalize} from 'vue'
+  import {ref, computed, watch, capitalize, defineExpose} from 'vue'
   const props = defineProps(['name'])
   const emit = defineEmits(["style-update"])
   const filter_ratio = ref(0.0)
@@ -11,9 +11,15 @@
     //which filter has which value
     emit('style-update', [props.name, style_text.value])
   })
+  function resetValue() {
+    filter_ratio.value = 0.0
+  }
+  defineExpose({resetValue})
 </script>
 
 <template>
-  <label>{{capitalize(name)}}: {{filter_ratio.toFixed(2)}}</label>
-  <input type="range" class="effect-slider-{{name}}" max="1.0" min="-1.0" step=".05" v-model.number="filter_ratio">
+  <div>
+    <label>{{capitalize(name)}}: {{filter_ratio.toFixed(2)}}</label>
+    <input type="range" class="effect-slider-{{name}}" max="1.0" min="-1.0" step=".05" v-model.number="filter_ratio">
+  </div>
 </template>
