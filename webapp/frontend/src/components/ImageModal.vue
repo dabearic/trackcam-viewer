@@ -184,10 +184,7 @@
         <!-- Side panel -->
         <div class="modal__panel">
           <!-- Prediction summary -->
-          <section class="panel__section">
-            <h3 class="panel__heading">Image Adjustment</h3>
-            <FiltersBox :filterTypes="filterTypes" @styles-update="filterStyleText.value=$event"/>
-          </section>
+
           <section class="panel__section">
             <h3 class="panel__heading">Prediction</h3>
             <div v-if="image.prediction" class="panel__prediction">
@@ -259,9 +256,16 @@
             </div>
           </section>
 
+           <section class="panel__section">
+            <ShowHideSection name="Image Adjustment" class="panel__heading" show-by-default="false" onName="+" off-name="-">
+              <FiltersBox :filterTypes="filterTypes" @styles-update="filterStyleText.value=$event"/>
+            </ShowHideSection>
+          </section>
+
           <!-- EXIF tags -->
-          <section v-if="exifEntries.length || exifLoading" class="panel__section">
-            <h3 class="panel__heading">EXIF</h3>
+
+          <ShowHideSection name="EXIF" show-by-default="true" on-name="+" off-name="-" >
+            <section class="panel__section">
             <div v-if="exifLoading" class="panel__exif-loading">Reading…</div>
             <dl v-else class="panel__meta panel__exif">
               <template v-for="[k, v] in exifEntries" :key="k">
@@ -269,7 +273,9 @@
                 <dd>{{ v }}</dd>
               </template>
             </dl>
-          </section>
+            </section>
+
+          </ShowHideSection>
 
           <!-- Failures -->
           <section v-if="image.failures?.length" class="panel__section">
@@ -290,6 +296,7 @@ import DetectionEditor from './DetectionEditor.vue'
 import { imageUrl, apiFetch } from '../firebase.js'
 import { useSpeciesCatalog } from '../composables/useSpeciesCatalog.js'
 import FiltersBox from "./FiltersBox.vue";
+import ShowHideSection from "./ShowHideSection.vue";
 
 const props = defineProps({
   image: Object,
@@ -320,6 +327,7 @@ const { topFive: topFiveFor, flatSpecies, addCustom, loadCustom } = speciesCatal
 
 const filterTypes = ref(['contrast', 'brightness', 'saturate'])
 const filterStyleText = ref({filter: 'contrast(1.8)'})
+const showFilters = ref(false)
 
 function cancelDelete() {
   if (deleting.value) return
@@ -1491,7 +1499,6 @@ watch(() => props.image, () => {
 .panel__exif {
   grid-template-columns: minmax(90px, auto) 1fr;
   font-size: 11px;
-  max-height: 260px;
   overflow-y: auto;
   padding-right: 4px;
 }
