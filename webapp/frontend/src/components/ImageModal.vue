@@ -318,7 +318,7 @@ const predictionsRef  = computed(() => props.predictions)
 const speciesCatalog  = useSpeciesCatalog(predictionsRef)
 const { topFive: topFiveFor, flatSpecies, addCustom, loadCustom } = speciesCatalog
 
-const filterTypes = ref(['contrast', 'saturate'])
+const filterTypes = ref(['contrast', 'brightness', 'saturate'])
 const filterStyleText = ref({filter: 'contrast(1.8)'})
 
 function cancelDelete() {

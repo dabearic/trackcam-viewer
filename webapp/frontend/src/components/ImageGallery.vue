@@ -88,7 +88,6 @@ function detectionCounts(img) {
   const counts = new Map()
   for (const det of img.detections ?? []) {
     if (det.conf < 0.3) continue
-      console.log(img.prediction.common_name + ": " + img.prediction.score)
     const category = CATEGORY_LABEL[det.category] ?? 'unknown'
     let name = (category === 'animal' && det.label) ? det.label : category
     if(category === 'animal' && img.prediction && img.prediction.common_name && img.prediction.common_name !== 'human')
@@ -97,6 +96,12 @@ function detectionCounts(img) {
     const existing = counts.get(key)
     if (existing) existing.count++
     else counts.set(key, { name, category, count: 1 })
+  }
+  if (counts.size === 0) {
+    let name = 'blank'
+    let category = 'blank'
+
+    counts.set('blank', {name, category, count: 1})
   }
   return [...counts.values()]
 }
