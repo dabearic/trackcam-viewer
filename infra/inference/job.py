@@ -25,6 +25,21 @@ CROP_CONF_THRESHOLD = 0.2
 CROP_MAX_DIM        = 512
 CROP_JPEG_QUALITY   = 85
 
+# SpeciesNet's detector resizes every input to 1280px on the long edge
+# (yolov5 letterbox, stride 64) and the classifier crops then squashes to
+# 480x480. Camera-trap originals are routinely 4000+ px / 5-20 MB, so
+# every image is decoded twice (once for detector_preprocess, once for
+# classifier_preprocess) at a resolution that gets thrown away. Pre-
+# resizing to 1920px gives the classifier ~50% headroom over its 480px
+# input — enough that crops on small/distant animals don't have to be
+# upsampled — while cutting the JPEG-decode and letterbox work on the
+# CPU side of the SpeciesNet pipeline. Crops written to GCS still come
+# from the un-resized originals (see crop loop below) so output quality
+# is unchanged.
+INFERENCE_MAX_DIM       = 1920
+INFERENCE_JPEG_QUALITY  = 90
+RESIZE_WORKERS          = 16
+
 # GCS round-trip latency (~50-200ms per blob) dominates large-batch wall
 # time — sequential I/O made a 513-image run take ~14 minutes on top of
 # inference. 16 workers cuts that to single-digit minutes without
@@ -78,6 +93,40 @@ def _extract_taken_at(path: str) -> str | None:
 # ── ANSI / tqdm helpers (same as local backend) ───────────────────────────────
 _ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\r')
 _TQDM_RE = re.compile(r'^(.+?)\s*:\s*(\d+)%\|[^|]*\|\s*(\d+)/(\d+)')
+
+
+def _resize_for_inference(orig_path: str, resized_path: str) -> str:
+    """Decode `orig_path`, resize so max(w, h) <= INFERENCE_MAX_DIM, save JPEG.
+
+    Returns the path the SpeciesNet pipeline should read. Falls back to the
+    original path on any failure so a single bad file doesn't take the job
+    down — speciesnet's own load_rgb_image will then surface the error per
+    image. EXIF is preserved so SpeciesNet's exif_transpose, the crop
+    pipeline's exif_transpose, and _extract_taken_at all see the same
+    metadata they would on the original.
+    """
+    try:
+        with Image.open(orig_path) as img:
+            w, h = img.size
+            if max(w, h) <= INFERENCE_MAX_DIM:
+                # Already small enough — point speciesnet at the original
+                # rather than spending decode cost re-encoding it.
+                return orig_path
+            img.thumbnail((INFERENCE_MAX_DIM, INFERENCE_MAX_DIM), Image.LANCZOS)
+            save_kwargs = {
+                "format": "JPEG",
+                "quality": INFERENCE_JPEG_QUALITY,
+                "optimize": True,
+            }
+            exif = img.info.get("exif")
+            if exif:
+                save_kwargs["exif"] = exif
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            img.save(resized_path, **save_kwargs)
+            return resized_path
+    except Exception:
+        return orig_path
 
 
 def _save_crop(image: Image.Image, bbox: list, dest_path: str) -> None:
@@ -176,10 +225,29 @@ def main():
                 if done % 20 == 0 or done == len(files):
                     set_status("running", f"Downloaded {done}/{len(files)} images…")
 
+        # ── Pre-resize for inference (CPU, parallel) ──────────────────────
+        # See comment on INFERENCE_MAX_DIM. SpeciesNet runs on these
+        # smaller files; the crop loop still reads the originals so
+        # uploaded crops keep full source resolution.
+        set_status("running", f"Preparing {len(local_paths)} image(s) for inference…")
+        inference_to_orig: dict[str, str] = {}
+
+        def _resize_one(local_path: str) -> tuple[str, str]:
+            stem, ext = os.path.splitext(local_path)
+            # `.r.jpg` rather than overwriting so the crop loop and
+            # _extract_taken_at can read the un-resized original.
+            resized_path = f"{stem}.r.jpg"
+            inference_path = _resize_for_inference(local_path, resized_path)
+            return local_path, inference_path
+
+        with ThreadPoolExecutor(max_workers=RESIZE_WORKERS) as ex:
+            for orig_path, inference_path in ex.map(_resize_one, local_paths):
+                inference_to_orig[inference_path] = orig_path
+
         # ── Build instances JSON ──────────────────────────────────────────────
         instances = []
-        for local_path in local_paths:
-            inst: dict = {"filepath": local_path}
+        for inference_path in inference_to_orig.keys():
+            inst: dict = {"filepath": inference_path}
             if country:
                 inst["country"] = country
             if admin1_region:
@@ -258,8 +326,13 @@ def main():
         # write paths (one upload per detection above the conf threshold).
         crop_jobs: list[tuple[str, str, dict]] = []  # (local_path, gcs_path, det)
         for pred in output.get("predictions", []):
-            local_fp = pred["filepath"]
-            gcs_path = path_map.get(local_fp, local_fp)
+            inference_fp = pred["filepath"]
+            # Crop from the un-resized original — bbox is in normalized
+            # coords so the same bbox crops the same region regardless of
+            # source resolution, but the original gives sharper output for
+            # small/distant subjects whose crop is below CROP_MAX_DIM.
+            orig_fp = inference_to_orig.get(inference_fp, inference_fp)
+            gcs_path = path_map.get(orig_fp, orig_fp)
             filename = Path(gcs_path).name
             detections = pred.get("detections", [])
             source_image = None
@@ -273,9 +346,9 @@ def main():
                         # Without this, crops come out 90°/180° rotated for
                         # any image whose camera embedded a non-default
                         # Orientation tag (very common on trail cams).
-                        source_image = ImageOps.exif_transpose(Image.open(local_fp))
+                        source_image = ImageOps.exif_transpose(Image.open(orig_fp))
                     except Exception as exc:
-                        log.append(f"crop: could not open {local_fp}: {exc}")
+                        log.append(f"crop: could not open {orig_fp}: {exc}")
                         break
                 stem = Path(filename).stem
                 crop_filename = f"{stem}_detection_{idx + 1}.jpg"
@@ -317,8 +390,9 @@ def main():
         summary_images: list[dict] = []
 
         for pred in output.get("predictions", []):
-            local_fp = pred["filepath"]
-            gcs_path = path_map.get(local_fp, local_fp)
+            inference_fp = pred["filepath"]
+            orig_fp = inference_to_orig.get(inference_fp, inference_fp)
+            gcs_path = path_map.get(orig_fp, orig_fp)
             filename = Path(gcs_path).name
 
             doc_id = hashlib.md5(gcs_path.encode()).hexdigest()
@@ -342,7 +416,7 @@ def main():
                 "filename":          filename,
                 "folder":            folder,
                 "uid":               uid,
-                "taken_at":          _extract_taken_at(local_fp),
+                "taken_at":          _extract_taken_at(orig_fp),
                 "prediction":        prediction_label,
                 "prediction_score":  pred.get("prediction_score"),
                 "prediction_source": pred.get("prediction_source"),
