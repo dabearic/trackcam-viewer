@@ -32,6 +32,13 @@ CROP_JPEG_QUALITY   = 85
 DOWNLOAD_WORKERS = 16
 UPLOAD_WORKERS   = 16
 
+# Crop generation = (Image.open + exif_transpose + crop + JPEG encode)
+# per source image. PIL's libjpeg / libpng C calls release the GIL, so
+# threads do give real parallelism here. A single-threaded loop on a
+# 200-image / 200-crop batch was running ~30s; pooling matches the
+# download/upload pattern above.
+CROP_WORKERS = 16
+
 # The web backend fires run_job at upload-prepare time, so the container
 # often starts cold-starting BEFORE the browser has finished PUT-ing all
 # files to GCS. Poll for missing blobs here, up to a generous timeout, so
@@ -264,44 +271,55 @@ def main():
 
         folder = job_doc.get("folder", "")
 
-        # ── Generate crops (CPU) then upload in parallel (I/O) ────────────────
-        # Splitting these phases lets us serialize the cheap PIL work and
-        # batch the slow GCS round-trips into a thread pool — same trick
-        # the download loop above uses, applied to the larger of the two
-        # write paths (one upload per detection above the conf threshold).
-        crop_jobs: list[tuple[str, str, dict]] = []  # (local_path, gcs_path, det)
-        for pred in output.get("predictions", []):
+        # ── Generate crops (CPU, parallel) then upload (I/O, parallel) ────
+        # PIL decode + crop + JPEG encode is the dominant non-inference
+        # cost on detection-heavy batches (~30s for 200 crops on a 200-
+        # image batch, single-threaded). libjpeg releases the GIL so a
+        # thread pool gives near-linear speedup; we still serialize per-
+        # image work (open the source once, emit all its crops together)
+        # to avoid re-decoding the same JPEG once per detection.
+        def _generate_crops_for_pred(pred: dict) -> list[tuple[str, str, dict]]:
             local_fp = pred["filepath"]
             gcs_path = path_map.get(local_fp, local_fp)
             filename = Path(gcs_path).name
-            detections = pred.get("detections", [])
-            source_image = None
-            for idx, det in enumerate(detections):
-                if det.get("conf", 0) < CROP_CONF_THRESHOLD or not det.get("bbox"):
-                    continue
-                if source_image is None:
-                    try:
-                        # Apply EXIF orientation so portrait-mode photos crop
-                        # in the orientation the browser displays them in.
-                        # Without this, crops come out 90°/180° rotated for
-                        # any image whose camera embedded a non-default
-                        # Orientation tag (very common on trail cams).
-                        source_image = ImageOps.exif_transpose(Image.open(local_fp))
-                    except Exception as exc:
-                        log.append(f"crop: could not open {local_fp}: {exc}")
-                        break
+            valid = [
+                (idx, det) for idx, det in enumerate(pred.get("detections", []))
+                if det.get("conf", 0) >= CROP_CONF_THRESHOLD and det.get("bbox")
+            ]
+            if not valid:
+                return []
+            try:
+                # Apply EXIF orientation so portrait-mode photos crop
+                # in the orientation the browser displays them in.
+                # Without this, crops come out 90°/180° rotated for
+                # any image whose camera embedded a non-default
+                # Orientation tag (very common on trail cams).
+                with Image.open(local_fp) as raw:
+                    source_image = ImageOps.exif_transpose(raw)
+            except Exception as exc:
+                log.append(f"crop: could not open {local_fp}: {exc}")
+                return []
+            results: list[tuple[str, str, dict]] = []
+            try:
                 stem = Path(filename).stem
-                crop_filename = f"{stem}_detection_{idx + 1}.jpg"
-                crop_local = os.path.join(tmpdir, crop_filename)
-                try:
-                    _save_crop(source_image, det["bbox"], crop_local)
-                except Exception as exc:
-                    log.append(f"crop: failed for {filename} det {idx}: {exc}")
-                    continue
-                crop_gcs_path = f"crops/{uid}/{folder}/{crop_filename}"
-                crop_jobs.append((crop_local, crop_gcs_path, det))
-            if source_image is not None:
+                for idx, det in valid:
+                    crop_filename = f"{stem}_detection_{idx + 1}.jpg"
+                    crop_local = os.path.join(tmpdir, crop_filename)
+                    try:
+                        _save_crop(source_image, det["bbox"], crop_local)
+                    except Exception as exc:
+                        log.append(f"crop: failed for {filename} det {idx}: {exc}")
+                        continue
+                    crop_gcs_path = f"crops/{uid}/{folder}/{crop_filename}"
+                    results.append((crop_local, crop_gcs_path, det))
+            finally:
                 source_image.close()
+            return results
+
+        crop_jobs: list[tuple[str, str, dict]] = []  # (local_path, gcs_path, det)
+        with ThreadPoolExecutor(max_workers=CROP_WORKERS) as ex:
+            for crop_entries in ex.map(_generate_crops_for_pred, output.get("predictions", [])):
+                crop_jobs.extend(crop_entries)
 
         if crop_jobs:
             set_status("running", f"Uploading {len(crop_jobs)} crop(s)…")
