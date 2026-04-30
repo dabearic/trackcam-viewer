@@ -14,7 +14,7 @@ import re
 import subprocess
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,8 +41,11 @@ CROP_WORKERS = 16
 
 # The web backend fires run_job at upload-prepare time, so the container
 # often starts cold-starting BEFORE the browser has finished PUT-ing all
-# files to GCS. Poll for missing blobs here, up to a generous timeout, so
-# the cold-start overlaps with (instead of following) the upload phase.
+# files to GCS. Each download worker polls for its assigned blob, then
+# downloads as soon as it appears — pipelining the wait and the download
+# so by the time the last upload arrives, earlier files are already on
+# disk. The timeout below is per-file, not per-job: a single file that
+# never arrives fails the job after this much wall time.
 UPLOAD_WAIT_TIMEOUT_S = 900   # 15 min — well above any realistic upload
 UPLOAD_WAIT_POLL_S    = 3
 
@@ -151,37 +154,49 @@ def main():
     latitude      = params.get("latitude")
     longitude     = params.get("longitude")
 
-    # ── Wait for any uploads that are still in flight ─────────────────────
-    # The backend may have kicked off run_job before the browser finished
-    # PUT-ing files. Block here until all blobs exist, or fail after a
-    # generous timeout.
-    _wait_for_uploads(bucket, files, set_status)
-
-    set_status("running", f"Downloading {len(files)} image(s) from storage…")
+    set_status("running", f"Fetching {len(files)} image(s) from storage…")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # ── Download images from GCS ──────────────────────────────────────────
-        # Sequential downloads were the dominant cost on large batches:
-        # GCS round-trip latency (~50-200ms) stacked across 500 blobs is
-        # several minutes. Parallelize so wall time scales by total bytes
-        # rather than blob count.
+        # ── Wait + download in a single pipelined phase ───────────────────
+        # The backend often fires run_job before the browser has finished
+        # PUT-ing every file. Previously we waited for every blob to exist
+        # and only then started parallel downloads — that left ~10s of
+        # serialized download work running AFTER the last upload landed.
+        # Now each worker polls for its assigned blob and downloads as
+        # soon as it appears, so by the time the last upload arrives the
+        # earlier files are already on disk. For already-uploaded jobs
+        # each worker probes once and proceeds straight to download
+        # (one HEAD per file vs the old N-HEADs-per-poll-cycle approach).
         local_paths: list[str] = []
         path_map: dict[str, str] = {}  # local_path -> gcs_path
 
-        def _download_one(gcs_path: str) -> tuple[str, str]:
-            filename   = Path(gcs_path).name
-            local_path = os.path.join(tmpdir, filename)
-            bucket.blob(gcs_path).download_to_filename(local_path)
+        def _wait_and_download_one(gcs_path: str) -> tuple[str, str]:
+            blob = bucket.blob(gcs_path)
+            start = time.time()
+            while not blob.exists():
+                if time.time() - start > UPLOAD_WAIT_TIMEOUT_S:
+                    raise TimeoutError(
+                        f"Upload never arrived after {UPLOAD_WAIT_TIMEOUT_S}s: {gcs_path}"
+                    )
+                time.sleep(UPLOAD_WAIT_POLL_S)
+            local_path = os.path.join(tmpdir, Path(gcs_path).name)
+            blob.download_to_filename(local_path)
             return gcs_path, local_path
 
         with ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as ex:
+            futures = [ex.submit(_wait_and_download_one, f) for f in files]
             done = 0
-            for gcs_path, local_path in ex.map(_download_one, files):
-                local_paths.append(local_path)
-                path_map[local_path] = gcs_path
-                done += 1
-                if done % 20 == 0 or done == len(files):
-                    set_status("running", f"Downloaded {done}/{len(files)} images…")
+            try:
+                for fut in as_completed(futures):
+                    gcs_path, local_path = fut.result()
+                    local_paths.append(local_path)
+                    path_map[local_path] = gcs_path
+                    done += 1
+                    if done % 20 == 0 or done == len(files):
+                        set_status("running", f"Fetched {done}/{len(files)} images…")
+            except TimeoutError as exc:
+                set_status("error", str(exc))
+                raise SystemExit(1)
 
         # ── Build instances JSON ──────────────────────────────────────────────
         instances = []
@@ -434,36 +449,6 @@ def main():
         set_status("done", f"Done — {count} prediction(s) saved",
                    {"completed_at": now, "summary": summary})
         print(f"[done] Saved {count} predictions for user {uid}")
-
-
-def _wait_for_uploads(bucket, files: list[str], set_status) -> None:
-    """Poll GCS until every path in `files` has an object, or time out.
-
-    First pass: if everything's already uploaded we don't touch the job
-    doc at all, so fully-uploaded-then-process flows behave identically
-    to before. Only prints a "Waiting for uploads…" status when we
-    actually need to wait.
-    """
-    missing = [p for p in files if not bucket.blob(p).exists()]
-    if not missing:
-        return
-
-    start = time.time()
-    while missing:
-        present = len(files) - len(missing)
-        set_status(
-            "running",
-            f"Waiting for uploads ({present}/{len(files)} ready)…",
-        )
-        if time.time() - start > UPLOAD_WAIT_TIMEOUT_S:
-            set_status(
-                "error",
-                f"Timed out waiting for uploads — {len(missing)}/{len(files)} "
-                f"file(s) never arrived in GCS",
-            )
-            raise SystemExit(1)
-        time.sleep(UPLOAD_WAIT_POLL_S)
-        missing = [p for p in files if not bucket.blob(p).exists()]
 
 
 def _now() -> str:
