@@ -196,13 +196,26 @@ def main():
         with open(instances_file, "w") as f:
             json.dump({"instances": instances}, f)
 
-        set_status("running", "Running SpeciesNet inference…")
+        # SpeciesNet's classifier batch size and parallelism mode are tunable
+        # at the run_model.py CLI; expose them via env so deploys can sweep
+        # (gcloud run jobs update --update-env-vars) without rebuilding the
+        # image. Defaults match speciesnet's own defaults so omitting the
+        # env vars reproduces baseline behavior exactly.
+        speciesnet_batch_size = os.environ.get("SPECIESNET_BATCH_SIZE", "8")
+        speciesnet_run_mode   = os.environ.get("SPECIESNET_RUN_MODE", "multi_thread")
+        set_status(
+            "running",
+            f"Running SpeciesNet inference (batch_size={speciesnet_batch_size}, "
+            f"run_mode={speciesnet_run_mode})…",
+        )
 
         # ── Run SpeciesNet ────────────────────────────────────────────────────
         cmd = [
             "python", "-u", "-m", "speciesnet.scripts.run_model",
             "--instances_json", instances_file,
             "--predictions_json", predictions_file,
+            "--batch_size", speciesnet_batch_size,
+            "--run_mode", speciesnet_run_mode,
             "--bypass_prompts",
         ]
 
