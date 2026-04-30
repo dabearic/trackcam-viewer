@@ -95,10 +95,11 @@ resource "google_cloud_run_v2_job" "inference" {
           name  = "GCP_PROJECT"
           value = var.project_id
         }
-        # KAGGLEHUB_CACHE env, the model-cache volume, and the volume mount
-        # are applied via the inference_gpu provisioner below — declaring
-        # them here would race with the gcloud update that re-asserts GPU
-        # config and wipe v2-only fields.
+        # KAGGLEHUB_CACHE is baked into the inference image (see
+        # ENV in Dockerfile.inference) so model files prefetched at build
+        # time are found at runtime. Declaring it here would race with the
+        # gcloud update below that re-asserts GPU config and could wipe
+        # v2-only fields.
       }
     }
   }

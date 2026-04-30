@@ -49,7 +49,13 @@ RUN python -m pip install --no-cache-dir -r requirements.txt \
 # already pays the image pull, so amortizing the model bytes there beats
 # downloading them from Kaggle Hub (or reading them through GCS FUSE) on
 # every job. See infra/inference/prefetch_models.py for what's fetched.
-ENV KAGGLEHUB_CACHE=/opt/kagglehub
+#
+# The path must match the KAGGLEHUB_CACHE env on the deployed Cloud Run
+# Job — historically /mnt/model-cache (originally a mounted volume that's
+# since been removed via --clear-volumes in the deploy script). When the
+# build path and the runtime env disagree, kagglehub silently re-fetches
+# the entire 250 MB bundle on every cold start.
+ENV KAGGLEHUB_CACHE=/mnt/model-cache
 COPY prefetch_models.py ./
 RUN python prefetch_models.py && rm prefetch_models.py
 
