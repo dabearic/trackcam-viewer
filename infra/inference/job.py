@@ -246,6 +246,13 @@ def main():
                 }
                 job_ref.update({"progress": progress, "updated_at": _now()})
             else:
+                # Mirror to stdout so Cloud Logging captures speciesnet's
+                # output (including stack traces and CUDA OOM messages).
+                # Without this, errors are only visible to the user via the
+                # in-app job-detail view, which makes post-mortems painful.
+                # Tqdm progress lines are intentionally skipped — they would
+                # add hundreds of lines per run with no diagnostic value.
+                print(f"[speciesnet] {line}", flush=True)
                 log.append(line)
                 job_ref.update({"message": line, "log": log[-50:], "updated_at": _now()})
 
