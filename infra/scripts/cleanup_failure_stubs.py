@@ -26,8 +26,23 @@ Environment:
   GCP_PROJECT.
   Google ADC with Firestore read/write.
 
-Usage:
-  python infra/scripts/cleanup_failure_stubs.py --uid UID --job-id JOBID [--dry-run]
+Dependencies:
+  pip install google-cloud-firestore
+
+Usage (bash / Linux / macOS):
+  GCP_PROJECT=trackcam-viewer python infra/scripts/cleanup_failure_stubs.py \
+      --uid UID --job-id JOBID --dry-run
+
+Usage (PowerShell on Windows):
+  $env:GCP_PROJECT="trackcam-viewer"
+  py infra/scripts/cleanup_failure_stubs.py --uid UID --job-id JOBID --dry-run
+
+  On Windows the bare `python` command is intercepted by the Microsoft
+  Store app-execution alias; use `py` (the Python launcher) instead.
+  If `from google.cloud import firestore` fails, run
+  `py -m pip install google-cloud-firestore` — the user-site install
+  path is not always on Python's import search list depending on how
+  your shell is configured.
 
 The job_id is the firestore job-doc ID (8-char hex) — NOT the Cloud Run
 execution suffix. Find it on any of the bad prediction docs in the
