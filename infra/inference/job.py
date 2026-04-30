@@ -363,6 +363,32 @@ def main():
                     "category":    category,
                 })
 
+            # Surface a "latest qualifying crop" pointer on the job doc so
+            # the upload-dialog UI can render a live thumbnail of the most-
+            # recently-classified animal without subscribing to Firestore
+            # or running a separate query (the doc is already polled every
+            # 2s for status). Concurrent updates from multiple workers are
+            # last-writer-wins, which is exactly the desired semantics:
+            # whichever prediction completed most recently wins the slot.
+            score = pred.get("prediction_score") or 0
+            if category == "animal" and score >= 0.5:
+                best_crop = max(
+                    (d for d in pred.get("detections", []) if d.get("crop_gcs_path")),
+                    key=lambda d: d.get("conf", 0),
+                    default=None,
+                )
+                if best_crop:
+                    job_ref.update({
+                        "latest_animal_crop": {
+                            "filename":      filename,
+                            "common_name":   common,
+                            "score":         round(score, 3),
+                            "crop_gcs_path": best_crop["crop_gcs_path"],
+                            "classified_at": now_iso,
+                        },
+                        "updated_at": now_iso,
+                    })
+
             with count_lock:
                 count += 1
                 my_count = count

@@ -107,6 +107,23 @@
             {{ formatElapsed(elapsedSec) }}
           </span>
         </div>
+
+        <!-- Streaming thumbnail of the most-recently-classified animal
+             (≥50% confidence). Appears as soon as inference has produced
+             at least one qualifying prediction; updates in place every
+             time a new one lands. -->
+        <div v-if="showLatestCrop" class="latest-crop">
+          <img
+            :src="latestCropUrl"
+            :alt="job.latest_animal_crop.common_name"
+            class="latest-crop__img"
+          />
+          <div class="latest-crop__meta">
+            <span class="latest-crop__heading">Latest classification</span>
+            <span class="latest-crop__name">{{ capitalize(job.latest_animal_crop.common_name) }}</span>
+            <span class="latest-crop__score">{{ Math.round(job.latest_animal_crop.score * 100) }}% confidence</span>
+          </div>
+        </div>
       </div>
 
       <!-- ── Inference progress ── -->
@@ -126,6 +143,23 @@
           Loading the AI model. This typically takes 30–60 seconds on the
           first upload and is much faster on subsequent runs.
         </p>
+
+        <!-- Streaming thumbnail of the most-recently-classified animal
+             (≥50% confidence). Same panel as in the upload phase; lives
+             here too so it stays visible as predictions stream in
+             throughout inference. -->
+        <div v-if="showLatestCrop" class="latest-crop">
+          <img
+            :src="latestCropUrl"
+            :alt="job.latest_animal_crop.common_name"
+            class="latest-crop__img"
+          />
+          <div class="latest-crop__meta">
+            <span class="latest-crop__heading">Latest classification</span>
+            <span class="latest-crop__name">{{ capitalize(job.latest_animal_crop.common_name) }}</span>
+            <span class="latest-crop__score">{{ Math.round(job.latest_animal_crop.score * 100) }}% confidence</span>
+          </div>
+        </div>
 
         <div v-if="progressEntries.length" class="progress__stages">
           <div v-for="[label, p] in progressEntries" :key="label" class="progress__stage">
@@ -224,7 +258,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
-import { AUTH_ENABLED, apiFetch } from '../firebase.js'
+import { AUTH_ENABLED, apiFetch, imageUrl } from '../firebase.js'
 
 const emit = defineEmits(['close', 'done'])
 
@@ -301,6 +335,23 @@ const showWaitingHint = computed(() =>
   phase.value === 'processing'
   && (job.value.status === 'pending' || job.value.status === 'running')
   && progressEntries.value.length === 0,
+)
+
+// Streaming thumbnail: the inference job writes `latest_animal_crop` on
+// every prediction that's an animal with ≥50% confidence (see job.py).
+// Show it whenever there's something to show AND the job hasn't reached
+// its final state — once status === 'done' the full summary panel takes
+// over. Hidden if status === 'error' to avoid stale state alongside the
+// error banner.
+const showLatestCrop = computed(() =>
+  job.value.latest_animal_crop
+  && job.value.status !== 'done'
+  && job.value.status !== 'error',
+)
+const latestCropUrl = computed(() =>
+  job.value.latest_animal_crop
+    ? imageUrl(job.value.latest_animal_crop.crop_gcs_path)
+    : '',
 )
 
 function formatElapsed(s) {
@@ -931,5 +982,55 @@ onUnmounted(() => {
 .progress__details-toggle:hover {
   color: var(--text);
   text-decoration: underline;
+}
+
+/* Streaming "latest classification" thumbnail panel */
+.latest-crop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.latest-crop__img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: var(--radius);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.latest-crop__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.latest-crop__heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.latest-crop__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--animal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.latest-crop__score {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 </style>
