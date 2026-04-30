@@ -373,13 +373,31 @@ def main():
                     f"Streamed predictions: {my_count}/{len(files)} processed…",
                 )
 
-        def _scan_predictions_file(pool: ThreadPoolExecutor) -> None:
+        def _scan_predictions_file(
+            pool: ThreadPoolExecutor, accept_failures: bool = False
+        ) -> None:
             """Read predictions.json, dispatch new entries to workers.
             Idempotent — tracks `processed_filepaths` so each prediction
             runs exactly once even though we re-read the whole file each
             cycle. Speciesnet's atomic temp-file-then-rename means we
             never see partial writes; a JSONDecodeError just retries on
-            the next cycle."""
+            the next cycle.
+
+            CRITICAL: speciesnet's `_merge_results` writes a stub
+            `{filepath, failures: [...]}` entry for *every* input filepath
+            whose pipeline hasn't completed yet — see
+            github.com/google/cameratrapai/blob/main/speciesnet/multiprocessing.py:458.
+            So a periodic save at t=5s with only 10 of 119 predictions
+            done contains 10 real entries plus 109 failure stubs. If we
+            naively process those stubs we mark all 119 filepaths as
+            done and miss the real predictions when they arrive in later
+            saves — which is what produced the "lots of animals labelled
+            blank" regression in execution g7jrp.
+
+            Skip failure entries during in-progress scans so a stub
+            doesn't claim a filepath; pick them up in the final scan
+            after speciesnet exits, where any remaining failures are
+            real (e.g. an unloadable JPEG)."""
             if not os.path.exists(predictions_file):
                 return
             try:
@@ -391,9 +409,12 @@ def main():
             with processed_lock:
                 for pred in data.get("predictions", []):
                     fp = pred.get("filepath")
-                    if fp and fp not in processed_filepaths:
-                        processed_filepaths.add(fp)
-                        new_preds.append(pred)
+                    if not fp or fp in processed_filepaths:
+                        continue
+                    if pred.get("failures") and not accept_failures:
+                        continue
+                    processed_filepaths.add(fp)
+                    new_preds.append(pred)
             for pred in new_preds:
                 pool.submit(_process_one_prediction, pred)
 
@@ -438,10 +459,12 @@ def main():
 
         def _watcher() -> None:
             while not stop_event.wait(timeout=PREDICTIONS_POLL_S):
-                _scan_predictions_file(worker_pool)
-            # Final scan once speciesnet exits — picks up the last
-            # periodic save plus the final atomic write.
-            _scan_predictions_file(worker_pool)
+                _scan_predictions_file(worker_pool, accept_failures=False)
+            # Final scan once speciesnet exits — accept failure entries
+            # at this point because they're now genuine (load_rgb_image
+            # gave up on a corrupt file etc.) rather than "not yet
+            # processed" stubs from an in-flight pipeline.
+            _scan_predictions_file(worker_pool, accept_failures=True)
 
         watcher_thread = threading.Thread(target=_watcher, daemon=True)
         watcher_thread.start()
