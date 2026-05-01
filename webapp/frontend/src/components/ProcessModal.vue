@@ -154,22 +154,19 @@
           </div>
         </div>
 
-        <div v-if="progressEntries.length" class="progress__stages">
-          <div v-for="[label, p] in progressEntries" :key="label" class="progress__stage">
-            <div class="progress__stage-header">
-              <span class="progress__stage-label">{{ label }}</span>
-              <span class="progress__stage-count">{{ p.current }}/{{ p.total }}</span>
-              <span class="progress__stage-pct" :class="p.percent === 100 ? 'progress__stage-pct--done' : ''">
-                {{ p.percent }}%
-              </span>
-            </div>
-            <div class="progress__stage-track">
-              <div
-                class="progress__stage-fill"
-                :class="p.percent === 100 ? 'progress__stage-fill--done' : ''"
-                :style="{ width: p.percent + '%' }"
-              ></div>
-            </div>
+        <div v-if="overallProgress" class="progress__stage">
+          <div class="progress__stage-header">
+            <span class="progress__stage-label">Inference</span>
+            <span class="progress__stage-pct" :class="overallProgress.percent === 100 ? 'progress__stage-pct--done' : ''">
+              {{ overallProgress.percent }}%
+            </span>
+          </div>
+          <div class="progress__stage-track">
+            <div
+              class="progress__stage-fill"
+              :class="overallProgress.percent === 100 ? 'progress__stage-fill--done' : ''"
+              :style="{ width: overallProgress.percent + '%' }"
+            ></div>
           </div>
         </div>
 
@@ -337,6 +334,25 @@ const canClose = computed(() =>
 )
 
 const progressEntries = computed(() => Object.entries(job.value.progress ?? {}))
+
+// Aggregate the per-stage tqdm bars (detector_preprocess, classifier_*,
+// etc.) into one overall percent. Each stage processes the same N
+// images so summing `current` and `total` across stages weights them
+// equally — a reasonable proxy for "overall pipeline progress." The
+// streaming crop gallery already gives a more concrete signal of work
+// completing, so a single aggregate bar is enough here.
+const overallProgress = computed(() => {
+  const entries = progressEntries.value
+  if (!entries.length) return null
+  let current = 0
+  let total = 0
+  for (const [, p] of entries) {
+    current += p.current
+    total += p.total
+  }
+  if (!total) return null
+  return { percent: Math.round((current / total) * 100) }
+})
 
 // Summary tallies, sorted by count desc.
 const categoryEntries = computed(() =>
