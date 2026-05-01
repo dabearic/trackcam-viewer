@@ -137,13 +137,6 @@
           <span v-if="job.status === 'done'" class="progress__count">✓</span>
         </div>
 
-        <!-- Cold-start / preparing hint while we're waiting for SpeciesNet
-             to start emitting progress bars -->
-        <p v-if="showWaitingHint" class="progress__hint">
-          Loading the AI model. This typically takes 30–60 seconds on the
-          first upload and is much faster on subsequent runs.
-        </p>
-
         <!-- Streaming thumbnail of the most-recently-classified animal
              (≥50% confidence). Same panel as in the upload phase; lives
              here too so it stays visible as predictions stream in
@@ -435,15 +428,6 @@ const showLog = ref(false)
 function capitalize(s) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
 }
-
-// Show the cold-start/warm-up hint until SpeciesNet starts reporting tqdm
-// progress (or the job finishes). The hint is the key signal that the app
-// is still working during the silent model-load stretch.
-const showWaitingHint = computed(() =>
-  phase.value === 'processing'
-  && (job.value.status === 'pending' || job.value.status === 'running')
-  && progressEntries.value.length === 0,
-)
 
 // Streaming thumbnail: the inference job writes `latest_animal_crop` on
 // every prediction that's an animal with ≥50% confidence (see job.py).
@@ -894,17 +878,6 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface2);
-}
-
-.progress__hint {
-  margin: 0;
-  padding: 8px 12px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-muted);
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
 }
 
 /* Stage bars */
