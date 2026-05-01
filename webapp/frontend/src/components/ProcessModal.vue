@@ -207,21 +207,40 @@
             >{{ capitalize(name) }} × {{ n }}</span>
           </div>
 
-          <ul v-if="job.summary.images?.length" class="summary__list">
-            <li
-              v-for="(img, i) in job.summary.images"
-              :key="i"
-              class="summary__row"
-            >
-              <span class="summary__filename" :title="img.filename">{{ img.filename }}</span>
-              <span
-                v-if="img.category"
-                :class="`badge badge--${img.category} summary__label`"
-              >{{ img.common_name ? capitalize(img.common_name) : img.category }}</span>
-              <span v-else class="summary__label summary__label--empty">—</span>
-              <span v-if="img.score" class="summary__score">{{ Math.round(img.score * 100) }}%</span>
-            </li>
-          </ul>
+          <div v-if="categorySlices.length || speciesSlices.length" class="summary__charts">
+            <div v-if="categorySlices.length" class="summary__chart">
+              <h4 class="summary__chart-title">Categories</h4>
+              <div class="summary__chart-row">
+                <svg viewBox="0 0 100 100" class="pie" aria-hidden="true">
+                  <circle v-if="categorySlices.length === 1" cx="50" cy="50" r="48" :fill="categorySlices[0].color" />
+                  <path v-else v-for="s in categorySlices" :key="s.label" :d="s.path" :fill="s.color" />
+                </svg>
+                <ul class="summary__legend">
+                  <li v-for="s in categorySlices" :key="s.label" class="summary__legend-row">
+                    <span class="summary__legend-swatch" :style="{ background: s.color }"></span>
+                    <span class="summary__legend-label">{{ capitalize(s.label) }}</span>
+                    <span class="summary__legend-count">{{ s.value }} ({{ s.percent }}%)</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <div v-if="speciesSlices.length" class="summary__chart">
+              <h4 class="summary__chart-title">Species detections</h4>
+              <div class="summary__chart-row">
+                <svg viewBox="0 0 100 100" class="pie" aria-hidden="true">
+                  <circle v-if="speciesSlices.length === 1" cx="50" cy="50" r="48" :fill="speciesSlices[0].color" />
+                  <path v-else v-for="s in speciesSlices" :key="s.label" :d="s.path" :fill="s.color" />
+                </svg>
+                <ul class="summary__legend">
+                  <li v-for="s in speciesSlices" :key="s.label" class="summary__legend-row">
+                    <span class="summary__legend-swatch" :style="{ background: s.color }"></span>
+                    <span class="summary__legend-label">{{ capitalize(s.label) }}</span>
+                    <span class="summary__legend-count">{{ s.value }} ({{ s.percent }}%)</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
         </section>
 
         <!-- Raw log — hidden by default; revealed via the "more details…"
@@ -318,6 +337,67 @@ const categoryEntries = computed(() =>
 )
 const speciesEntries = computed(() =>
   Object.entries(job.value.summary?.by_species ?? {}).sort((a, b) => b[1] - a[1])
+)
+
+// Pie-chart slices for the post-completion summary. Pure SVG —
+// no chart-library dependency for what's a handful of slices.
+//
+// Geometry: each slice spans `start..end` on a unit circle; the SVG
+// path is one straight edge from center to start point, an arc to
+// end point, and another straight edge back. Single-slice case
+// degenerates (start == end) so the template falls back to <circle>.
+const CATEGORY_COLORS = {
+  animal:  '#4ade80',  // matches --animal in style.css
+  human:   '#fb923c',
+  vehicle: '#60a5fa',
+  blank:   '#6b7280',
+}
+
+function pieSlices(entries, colorFn) {
+  if (!entries.length) return []
+  const total = entries.reduce((sum, [, n]) => sum + n, 0)
+  if (!total) return []
+  if (entries.length === 1) {
+    const [label, value] = entries[0]
+    return [{ label, value, percent: 100, path: '', color: colorFn(label, 0) }]
+  }
+  const cx = 50, cy = 50, r = 48
+  let cumulative = 0
+  return entries.map(([label, n], i) => {
+    const startA = (cumulative / total) * Math.PI * 2 - Math.PI / 2
+    cumulative += n
+    const endA = (cumulative / total) * Math.PI * 2 - Math.PI / 2
+    const x1 = (cx + r * Math.cos(startA)).toFixed(2)
+    const y1 = (cy + r * Math.sin(startA)).toFixed(2)
+    const x2 = (cx + r * Math.cos(endA)).toFixed(2)
+    const y2 = (cy + r * Math.sin(endA)).toFixed(2)
+    const largeArc = (endA - startA) > Math.PI ? 1 : 0
+    return {
+      label,
+      value: n,
+      percent: Math.round((n / total) * 100),
+      path: `M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${largeArc} 1 ${x2},${y2} Z`,
+      color: colorFn(label, i),
+    }
+  })
+}
+
+const categorySlices = computed(() =>
+  pieSlices(categoryEntries.value, label => CATEGORY_COLORS[label] || '#888'),
+)
+
+const speciesSlices = computed(() =>
+  pieSlices(speciesEntries.value, (label, i) => {
+    // Reuse the category color when the species name happens to be a
+    // category (`blank`, `human`, `vehicle`) so the two charts stay
+    // visually consistent.
+    const lower = label.toLowerCase()
+    if (CATEGORY_COLORS[lower]) return CATEGORY_COLORS[lower]
+    // Otherwise spread hues using the golden-angle (~137.5°) so
+    // adjacent slices stay visually distinct even with many species.
+    const hue = (i * 137.508) % 360
+    return `hsl(${hue}, 65%, 60%)`
+  }),
 )
 
 // Expand/collapse the raw log after success. Log stays visible by default
@@ -918,52 +998,81 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
 }
 
-.summary__list {
+/* Pie-chart summary panels */
+.summary__charts {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.summary__chart {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.summary__chart-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.summary__chart-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.pie {
+  width: 110px;
+  height: 110px;
+  flex-shrink: 0;
+}
+
+.summary__legend {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  max-height: 140px;
   overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 
-.summary__row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
+.summary__legend-row {
+  display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 10px;
   font-size: 12px;
-  border-bottom: 1px solid var(--border);
 }
 
-.summary__row:last-child { border-bottom: none; }
+.summary__legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
 
-.summary__filename {
+.summary__legend-label {
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-variant-numeric: tabular-nums;
+  flex: 1;
 }
 
-.summary__label {
-  font-size: 11px;
-}
-
-.summary__label--empty {
-  color: var(--text-muted);
-}
-
-.summary__score {
+.summary__legend-count {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
-  min-width: 32px;
-  text-align: right;
+  flex-shrink: 0;
 }
 
 .progress__details-toggle {
