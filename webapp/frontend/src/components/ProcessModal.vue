@@ -199,12 +199,26 @@
             </span>
           </header>
 
-          <div v-if="speciesEntries.length" class="summary__species">
-            <span
-              v-for="[name, n] in speciesEntries"
-              :key="name"
-              class="summary__species-chip"
-            >{{ capitalize(name) }} × {{ n }}</span>
+          <!-- Gallery of every animal crop the streaming pipeline showed
+               while the job was running. The reactive list (`seenCrops`)
+               accumulates each unique latest_animal_crop snapshot during
+               polling, so by the time the user reaches this summary
+               panel they can re-visit every classification at a glance
+               without leaving the dialog. -->
+          <div v-if="seenCrops.length" class="summary__crops">
+            <div
+              v-for="crop in seenCrops"
+              :key="crop.crop_gcs_path"
+              class="summary__crop"
+              :title="`${crop.filename} — ${capitalize(crop.common_name)} (${Math.round(crop.score * 100)}%)`"
+            >
+              <img
+                :src="imageUrl(crop.crop_gcs_path)"
+                :alt="crop.common_name"
+                class="summary__crop-img"
+              />
+              <span class="summary__crop-label">{{ capitalize(crop.common_name) }}</span>
+            </div>
           </div>
 
           <div v-if="categorySlices.length || speciesSlices.length" class="summary__charts">
@@ -338,6 +352,20 @@ const categoryEntries = computed(() =>
 const speciesEntries = computed(() =>
   Object.entries(job.value.summary?.by_species ?? {}).sort((a, b) => b[1] - a[1])
 )
+
+// Accumulate every distinct latest_animal_crop the polling sees over
+// the course of the job. The backend last-writer-wins update overwrites
+// `latest_animal_crop` each time a qualifying prediction lands, so
+// without this client-side accumulator only the final entry would be
+// available for the post-completion gallery. Deduped by crop_gcs_path
+// in case the same job doc gets re-polled before the field changes.
+const seenCrops = ref([])
+
+watch(() => job.value.latest_animal_crop, (crop) => {
+  if (!crop || !crop.crop_gcs_path) return
+  if (seenCrops.value.some(c => c.crop_gcs_path === crop.crop_gcs_path)) return
+  seenCrops.value.push({ ...crop })
+})
 
 // Pie-chart slices for the post-completion summary. Pure SVG —
 // no chart-library dependency for what's a handful of slices.
@@ -649,6 +677,7 @@ function reset() {
   elapsedSec.value      = null
   processingStart.value = null
   showLog.value         = false
+  seenCrops.value       = []
 }
 
 // Auto-scroll log
@@ -982,20 +1011,45 @@ onUnmounted(() => {
   margin-left: auto;
 }
 
-.summary__species {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.summary__species-chip {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 999px;
+/* Post-completion crop gallery — shows every animal crop the
+   streaming pipeline surfaced during the run. Auto-fit grid so the
+   layout adapts to the modal width without manual breakpoints. */
+.summary__crops {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
   background: var(--surface);
   border: 1px solid var(--border);
+  border-radius: var(--radius);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.summary__crop {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.summary__crop-img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--surface2);
+}
+
+.summary__crop-label {
+  font-size: 11px;
   color: var(--text);
-  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
 }
 
 /* Pie-chart summary panels */
