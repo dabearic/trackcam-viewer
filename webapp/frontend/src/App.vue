@@ -135,6 +135,11 @@
         </div>
       </div>
     </div>
+    <footer style="width: 100%"><label>TrailCam Viewer Copyright &copy 2026</label>
+      <div>
+      <a style="color: lightblue;" href="https://github.com/google/cameratrapai">SpeciesNet</a>
+        <label>&copy 2024 Google LLC is used under an Apache 2.0 License</label>
+      </div></footer>
   </div>
 
   <!-- Auth initialising -->
