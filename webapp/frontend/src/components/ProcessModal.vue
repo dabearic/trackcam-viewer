@@ -360,9 +360,9 @@ const categoryEntries = computed(() =>
 )
 // Common-name labels that aren't real species classifications — exclude
 // from the species pie chart because they're category-level outcomes
-// (blank/human) or signal the absence of any detection (no-cv-detect)
-// rather than a species the model picked.
-const NON_SPECIES_LABELS = new Set(['blank', 'human', 'no-cv-detect'])
+// (blank/human/vehicle) or signal the absence of any detection
+// (no-cv-detect) rather than a species the model picked.
+const NON_SPECIES_LABELS = new Set(['blank', 'human', 'vehicle', 'no-cv-detect'])
 
 const speciesEntries = computed(() =>
   Object.entries(job.value.summary?.by_species ?? {})
