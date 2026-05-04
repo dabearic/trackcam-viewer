@@ -358,8 +358,16 @@ const overallProgress = computed(() => {
 const categoryEntries = computed(() =>
   Object.entries(job.value.summary?.by_category ?? {}).sort((a, b) => b[1] - a[1])
 )
+// Common-name labels that aren't real species classifications — exclude
+// from the species pie chart because they're category-level outcomes
+// (blank/human) or signal the absence of any detection (no-cv-detect)
+// rather than a species the model picked.
+const NON_SPECIES_LABELS = new Set(['blank', 'human', 'no-cv-detect'])
+
 const speciesEntries = computed(() =>
-  Object.entries(job.value.summary?.by_species ?? {}).sort((a, b) => b[1] - a[1])
+  Object.entries(job.value.summary?.by_species ?? {})
+    .filter(([name]) => !NON_SPECIES_LABELS.has(name.toLowerCase()))
+    .sort((a, b) => b[1] - a[1])
 )
 
 // Accumulate every distinct latest_animal_crop the polling sees over
