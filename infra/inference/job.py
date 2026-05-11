@@ -513,9 +513,16 @@ def main():
                 # output (including stack traces and CUDA OOM messages).
                 # Tqdm progress lines are intentionally skipped — they would
                 # add hundreds of lines per run with no diagnostic value.
+                #
+                # Don't write `message` here: speciesnet's stdout includes
+                # raw absl logging lines (`I0430 23:17:49.517737 ... utils.py:501] …`)
+                # that are meaningless to end users. Let set_status() calls
+                # in this file be the only writers of the user-facing status
+                # text; the `log` field is still kept current so the in-app
+                # "More details…" disclosure shows the raw output.
                 print(f"[speciesnet] {line}", flush=True)
                 log.append(line)
-                job_ref.update({"message": line, "log": log[-50:], "updated_at": _now()})
+                job_ref.update({"log": log[-50:], "updated_at": _now()})
 
         process.wait()
 
