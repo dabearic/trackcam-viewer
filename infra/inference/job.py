@@ -363,6 +363,32 @@ def main():
                     "category":    category,
                 })
 
+            # Surface a "latest qualifying crop" pointer on the job doc so
+            # the upload-dialog UI can render a live thumbnail of the most-
+            # recently-classified animal without subscribing to Firestore
+            # or running a separate query (the doc is already polled every
+            # 2s for status). Concurrent updates from multiple workers are
+            # last-writer-wins, which is exactly the desired semantics:
+            # whichever prediction completed most recently wins the slot.
+            score = pred.get("prediction_score") or 0
+            if category == "animal" and score >= 0.5:
+                best_crop = max(
+                    (d for d in pred.get("detections", []) if d.get("crop_gcs_path")),
+                    key=lambda d: d.get("conf", 0),
+                    default=None,
+                )
+                if best_crop:
+                    job_ref.update({
+                        "latest_animal_crop": {
+                            "filename":      filename,
+                            "common_name":   common,
+                            "score":         round(score, 3),
+                            "crop_gcs_path": best_crop["crop_gcs_path"],
+                            "classified_at": now_iso,
+                        },
+                        "updated_at": now_iso,
+                    })
+
             with count_lock:
                 count += 1
                 my_count = count
@@ -487,9 +513,16 @@ def main():
                 # output (including stack traces and CUDA OOM messages).
                 # Tqdm progress lines are intentionally skipped — they would
                 # add hundreds of lines per run with no diagnostic value.
+                #
+                # Don't write `message` here: speciesnet's stdout includes
+                # raw absl logging lines (`I0430 23:17:49.517737 ... utils.py:501] …`)
+                # that are meaningless to end users. Let set_status() calls
+                # in this file be the only writers of the user-facing status
+                # text; the `log` field is still kept current so the in-app
+                # "More details…" disclosure shows the raw output.
                 print(f"[speciesnet] {line}", flush=True)
                 log.append(line)
-                job_ref.update({"message": line, "log": log[-50:], "updated_at": _now()})
+                job_ref.update({"log": log[-50:], "updated_at": _now()})
 
         process.wait()
 

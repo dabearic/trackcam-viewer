@@ -13,6 +13,7 @@ import os
 import urllib.parse
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -221,20 +222,34 @@ async def prepare_upload(
         raise HTTPException(status_code=400, detail="No filenames provided")
 
     folder = _safe_folder(req.folder)
-    uploads = []
-    for raw_name in req.filenames:
-        filename = Path(raw_name).name  # strip any path component
-        if Path(filename).suffix.lower() not in IMAGE_EXTS:
-            continue
+    filenames = [
+        Path(raw_name).name  # strip any path component
+        for raw_name in req.filenames
+        if Path(raw_name).suffix.lower() in IMAGE_EXTS
+    ]
+
+    # Sign URLs in parallel. generate_signed_url with explicit
+    # service_account_email + access_token uses the IAM signBlob API
+    # (~150ms per call) because Cloud Run's compute-engine creds can't
+    # sign locally. Serialized, a 100-file batch spent ~15s here before
+    # uploads could even start. Pull the access token once, then fan
+    # out so total prep time is bounded by one round-trip plus the
+    # number of batches the pool serializes through.
+    sign_kwargs = _sign_kwargs()
+
+    def _sign_one(filename: str) -> dict:
         gcs_path = f"images/{uid}/{folder}/{filename}"
         url = _bucket.blob(gcs_path).generate_signed_url(
             expiration=timedelta(minutes=30),
             method="PUT",
             content_type="image/jpeg",
             version="v4",
-            **_sign_kwargs(),
+            **sign_kwargs,
         )
-        uploads.append({"filename": filename, "gcs_path": gcs_path, "url": url})
+        return {"filename": filename, "gcs_path": gcs_path, "url": url}
+
+    with ThreadPoolExecutor(max_workers=32) as ex:
+        uploads = list(ex.map(_sign_one, filenames))
 
     if not uploads:
         return {
@@ -244,7 +259,7 @@ async def prepare_upload(
         }
 
     # Dedupe — skip GCS paths that already have a prediction doc
-    existing   = _existing_gcs_paths(uid)
+    existing   = _existing_gcs_paths(uid, [u["gcs_path"] for u in uploads])
     new_paths  = [u["gcs_path"] for u in uploads if u["gcs_path"] not in existing]
     skipped    = len(uploads) - len(new_paths)
     new_upload_set = set(new_paths)
@@ -361,9 +376,34 @@ async def list_jobs(uid: str = Depends(verify_token)):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _existing_gcs_paths(uid: str) -> set[str]:
-    docs = _db.collection("users").document(uid).collection("predictions").stream()
-    return {d.to_dict().get("gcs_path", "") for d in docs}
+def _existing_gcs_paths(uid: str, candidate_paths: list[str]) -> set[str]:
+    """Return the subset of `candidate_paths` that already have a prediction
+    doc in Firestore. Used by /api/upload/prepare to dedupe uploads.
+
+    Each prediction doc lives at `users/{uid}/predictions/{md5(gcs_path)}`
+    (see how job.py mints the ID), so we can flip the scan around: instead
+    of streaming every doc the user has ever made and checking each
+    gcs_path against the upload list, build the candidate doc IDs from
+    the upload list and batch-fetch only those refs. Reads change from
+    O(|history|) to O(|upload|) — for a user with 10K predictions
+    uploading 100 photos that's 100 reads instead of 10K, roughly 50×
+    cheaper in both latency and Firestore billing.
+    """
+    if not candidate_paths:
+        return set()
+    pred_col = _db.collection("users").document(uid).collection("predictions")
+    # Map each doc-id back to its source path so we can recover the
+    # human-readable path from a snapshot without reading the doc body.
+    id_to_path = {
+        hashlib.md5(p.encode()).hexdigest(): p
+        for p in candidate_paths
+    }
+    refs = [pred_col.document(doc_id) for doc_id in id_to_path]
+    return {
+        id_to_path[snap.id]
+        for snap in _db.get_all(refs)
+        if snap.exists
+    }
 
 
 def _safe_folder(name: str) -> str:

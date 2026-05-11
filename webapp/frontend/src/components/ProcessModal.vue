@@ -107,6 +107,23 @@
             {{ formatElapsed(elapsedSec) }}
           </span>
         </div>
+
+        <!-- Streaming thumbnail of the most-recently-classified animal
+             (≥50% confidence). Appears as soon as inference has produced
+             at least one qualifying prediction; updates in place every
+             time a new one lands. -->
+        <div v-if="showLatestCrop" class="latest-crop">
+          <img
+            :src="latestCropUrl"
+            :alt="job.latest_animal_crop.common_name"
+            class="latest-crop__img"
+          />
+          <div class="latest-crop__meta">
+            <span class="latest-crop__heading">Latest classification</span>
+            <span class="latest-crop__name">{{ capitalize(job.latest_animal_crop.common_name) }}</span>
+            <span class="latest-crop__score">{{ Math.round(job.latest_animal_crop.score * 100) }}% confidence</span>
+          </div>
+        </div>
       </div>
 
       <!-- ── Inference progress ── -->
@@ -120,29 +137,36 @@
           <span v-if="job.status === 'done'" class="progress__count">✓</span>
         </div>
 
-        <!-- Cold-start / preparing hint while we're waiting for SpeciesNet
-             to start emitting progress bars -->
-        <p v-if="showWaitingHint" class="progress__hint">
-          Loading the AI model. This typically takes 30–60 seconds on the
-          first upload and is much faster on subsequent runs.
-        </p>
+        <!-- Streaming thumbnail of the most-recently-classified animal
+             (≥50% confidence). Same panel as in the upload phase; lives
+             here too so it stays visible as predictions stream in
+             throughout inference. -->
+        <div v-if="showLatestCrop" class="latest-crop">
+          <img
+            :src="latestCropUrl"
+            :alt="job.latest_animal_crop.common_name"
+            class="latest-crop__img"
+          />
+          <div class="latest-crop__meta">
+            <span class="latest-crop__heading">Latest classification</span>
+            <span class="latest-crop__name">{{ capitalize(job.latest_animal_crop.common_name) }}</span>
+            <span class="latest-crop__score">{{ Math.round(job.latest_animal_crop.score * 100) }}% confidence</span>
+          </div>
+        </div>
 
-        <div v-if="progressEntries.length" class="progress__stages">
-          <div v-for="[label, p] in progressEntries" :key="label" class="progress__stage">
-            <div class="progress__stage-header">
-              <span class="progress__stage-label">{{ label }}</span>
-              <span class="progress__stage-count">{{ p.current }}/{{ p.total }}</span>
-              <span class="progress__stage-pct" :class="p.percent === 100 ? 'progress__stage-pct--done' : ''">
-                {{ p.percent }}%
-              </span>
-            </div>
-            <div class="progress__stage-track">
-              <div
-                class="progress__stage-fill"
-                :class="p.percent === 100 ? 'progress__stage-fill--done' : ''"
-                :style="{ width: p.percent + '%' }"
-              ></div>
-            </div>
+        <div v-if="overallProgress" class="progress__stage">
+          <div class="progress__stage-header">
+            <span class="progress__stage-label">Inference</span>
+            <span class="progress__stage-pct" :class="overallProgress.percent === 100 ? 'progress__stage-pct--done' : ''">
+              {{ overallProgress.percent }}%
+            </span>
+          </div>
+          <div class="progress__stage-track">
+            <div
+              class="progress__stage-fill"
+              :class="overallProgress.percent === 100 ? 'progress__stage-fill--done' : ''"
+              :style="{ width: overallProgress.percent + '%' }"
+            ></div>
           </div>
         </div>
 
@@ -165,29 +189,62 @@
             </span>
           </header>
 
-          <div v-if="speciesEntries.length" class="summary__species">
-            <span
-              v-for="[name, n] in speciesEntries"
-              :key="name"
-              class="summary__species-chip"
-            >{{ capitalize(name) }} × {{ n }}</span>
+          <!-- Gallery of every animal crop the streaming pipeline showed
+               while the job was running. The reactive list (`seenCrops`)
+               accumulates each unique latest_animal_crop snapshot during
+               polling, so by the time the user reaches this summary
+               panel they can re-visit every classification at a glance
+               without leaving the dialog. -->
+          <div v-if="seenCrops.length" class="summary__crops">
+            <div
+              v-for="crop in seenCrops"
+              :key="crop.crop_gcs_path"
+              class="summary__crop"
+              :title="`${crop.filename} — ${capitalize(crop.common_name)} (${Math.round(crop.score * 100)}%)`"
+            >
+              <img
+                :src="imageUrl(crop.crop_gcs_path)"
+                :alt="crop.common_name"
+                class="summary__crop-img"
+              />
+              <span class="summary__crop-label">{{ capitalize(crop.common_name) }}</span>
+            </div>
           </div>
 
-          <ul v-if="job.summary.images?.length" class="summary__list">
-            <li
-              v-for="(img, i) in job.summary.images"
-              :key="i"
-              class="summary__row"
-            >
-              <span class="summary__filename" :title="img.filename">{{ img.filename }}</span>
-              <span
-                v-if="img.category"
-                :class="`badge badge--${img.category} summary__label`"
-              >{{ img.common_name ? capitalize(img.common_name) : img.category }}</span>
-              <span v-else class="summary__label summary__label--empty">—</span>
-              <span v-if="img.score" class="summary__score">{{ Math.round(img.score * 100) }}%</span>
-            </li>
-          </ul>
+          <div v-if="categorySlices.length || speciesSlices.length" class="summary__charts">
+            <div v-if="categorySlices.length" class="summary__chart">
+              <h4 class="summary__chart-title">Categories</h4>
+              <div class="summary__chart-row">
+                <svg viewBox="0 0 100 100" class="pie" aria-hidden="true">
+                  <circle v-if="categorySlices.length === 1" cx="50" cy="50" r="48" :fill="categorySlices[0].color" />
+                  <path v-else v-for="s in categorySlices" :key="s.label" :d="s.path" :fill="s.color" />
+                </svg>
+                <ul class="summary__legend">
+                  <li v-for="s in categorySlices" :key="s.label" class="summary__legend-row">
+                    <span class="summary__legend-swatch" :style="{ background: s.color }"></span>
+                    <span class="summary__legend-label">{{ capitalize(s.label) }}</span>
+                    <span class="summary__legend-count">{{ s.value }} ({{ s.percent }}%)</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <div v-if="speciesSlices.length" class="summary__chart">
+              <h4 class="summary__chart-title">Species detections</h4>
+              <div class="summary__chart-row">
+                <svg viewBox="0 0 100 100" class="pie" aria-hidden="true">
+                  <circle v-if="speciesSlices.length === 1" cx="50" cy="50" r="48" :fill="speciesSlices[0].color" />
+                  <path v-else v-for="s in speciesSlices" :key="s.label" :d="s.path" :fill="s.color" />
+                </svg>
+                <ul class="summary__legend">
+                  <li v-for="s in speciesSlices" :key="s.label" class="summary__legend-row">
+                    <span class="summary__legend-swatch" :style="{ background: s.color }"></span>
+                    <span class="summary__legend-label">{{ capitalize(s.label) }}</span>
+                    <span class="summary__legend-count">{{ s.value }} ({{ s.percent }}%)</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
         </section>
 
         <!-- Raw log — hidden by default; revealed via the "more details…"
@@ -224,7 +281,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
-import { AUTH_ENABLED, apiFetch } from '../firebase.js'
+import { AUTH_ENABLED, apiFetch, imageUrl } from '../firebase.js'
 
 const emit = defineEmits(['close', 'done'])
 
@@ -278,12 +335,114 @@ const canClose = computed(() =>
 
 const progressEntries = computed(() => Object.entries(job.value.progress ?? {}))
 
+// Aggregate the per-stage tqdm bars (detector_preprocess, classifier_*,
+// etc.) into one overall percent. Each stage processes the same N
+// images so summing `current` and `total` across stages weights them
+// equally — a reasonable proxy for "overall pipeline progress." The
+// streaming crop gallery already gives a more concrete signal of work
+// completing, so a single aggregate bar is enough here.
+const overallProgress = computed(() => {
+  const entries = progressEntries.value
+  if (!entries.length) return null
+  let current = 0
+  let total = 0
+  for (const [, p] of entries) {
+    current += p.current
+    total += p.total
+  }
+  if (!total) return null
+  return { percent: Math.round((current / total) * 100) }
+})
+
 // Summary tallies, sorted by count desc.
 const categoryEntries = computed(() =>
   Object.entries(job.value.summary?.by_category ?? {}).sort((a, b) => b[1] - a[1])
 )
+// Common-name labels that aren't real species classifications — exclude
+// from the species pie chart because they're category-level outcomes
+// (blank/human/vehicle) or signal the absence of any detection
+// (no-cv-detect) rather than a species the model picked.
+const NON_SPECIES_LABELS = new Set(['blank', 'human', 'vehicle', 'no-cv-detect'])
+
 const speciesEntries = computed(() =>
-  Object.entries(job.value.summary?.by_species ?? {}).sort((a, b) => b[1] - a[1])
+  Object.entries(job.value.summary?.by_species ?? {})
+    .filter(([name]) => !NON_SPECIES_LABELS.has(name.toLowerCase()))
+    .sort((a, b) => b[1] - a[1])
+)
+
+// Accumulate every distinct latest_animal_crop the polling sees over
+// the course of the job. The backend last-writer-wins update overwrites
+// `latest_animal_crop` each time a qualifying prediction lands, so
+// without this client-side accumulator only the final entry would be
+// available for the post-completion gallery. Deduped by crop_gcs_path
+// in case the same job doc gets re-polled before the field changes.
+const seenCrops = ref([])
+
+watch(() => job.value.latest_animal_crop, (crop) => {
+  if (!crop || !crop.crop_gcs_path) return
+  if (seenCrops.value.some(c => c.crop_gcs_path === crop.crop_gcs_path)) return
+  seenCrops.value.push({ ...crop })
+})
+
+// Pie-chart slices for the post-completion summary. Pure SVG —
+// no chart-library dependency for what's a handful of slices.
+//
+// Geometry: each slice spans `start..end` on a unit circle; the SVG
+// path is one straight edge from center to start point, an arc to
+// end point, and another straight edge back. Single-slice case
+// degenerates (start == end) so the template falls back to <circle>.
+const CATEGORY_COLORS = {
+  animal:  '#4ade80',  // matches --animal in style.css
+  human:   '#fb923c',
+  vehicle: '#60a5fa',
+  blank:   '#6b7280',
+}
+
+function pieSlices(entries, colorFn) {
+  if (!entries.length) return []
+  const total = entries.reduce((sum, [, n]) => sum + n, 0)
+  if (!total) return []
+  if (entries.length === 1) {
+    const [label, value] = entries[0]
+    return [{ label, value, percent: 100, path: '', color: colorFn(label, 0) }]
+  }
+  const cx = 50, cy = 50, r = 48
+  let cumulative = 0
+  return entries.map(([label, n], i) => {
+    const startA = (cumulative / total) * Math.PI * 2 - Math.PI / 2
+    cumulative += n
+    const endA = (cumulative / total) * Math.PI * 2 - Math.PI / 2
+    const x1 = (cx + r * Math.cos(startA)).toFixed(2)
+    const y1 = (cy + r * Math.sin(startA)).toFixed(2)
+    const x2 = (cx + r * Math.cos(endA)).toFixed(2)
+    const y2 = (cy + r * Math.sin(endA)).toFixed(2)
+    const largeArc = (endA - startA) > Math.PI ? 1 : 0
+    return {
+      label,
+      value: n,
+      percent: Math.round((n / total) * 100),
+      path: `M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${largeArc} 1 ${x2},${y2} Z`,
+      color: colorFn(label, i),
+    }
+  })
+}
+
+const categorySlices = computed(() =>
+  pieSlices(categoryEntries.value, label => CATEGORY_COLORS[label] || '#888'),
+)
+
+const speciesSlices = computed(() =>
+  pieSlices(speciesEntries.value, (label, i) => {
+    // Reuse the category color when the species name happens to be a
+    // category (`blank`, `human`, `vehicle`) so the two charts stay
+    // visually consistent.
+    const lower = label.toLowerCase()
+    if (CATEGORY_COLORS[lower]) return CATEGORY_COLORS[lower]
+    // Otherwise spread hues using the golden-angle (~137.5°) so
+    // adjacent slices stay visually distinct even with many species.
+    const hue = (i * 137.508) % 360
+    return `hsl(${hue}, 65%, 60%)`
+  }),
 )
 
 // Expand/collapse the raw log after success. Log stays visible by default
@@ -294,13 +453,21 @@ function capitalize(s) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
 }
 
-// Show the cold-start/warm-up hint until SpeciesNet starts reporting tqdm
-// progress (or the job finishes). The hint is the key signal that the app
-// is still working during the silent model-load stretch.
-const showWaitingHint = computed(() =>
-  phase.value === 'processing'
-  && (job.value.status === 'pending' || job.value.status === 'running')
-  && progressEntries.value.length === 0,
+// Streaming thumbnail: the inference job writes `latest_animal_crop` on
+// every prediction that's an animal with ≥50% confidence (see job.py).
+// Show it whenever there's something to show AND the job hasn't reached
+// its final state — once status === 'done' the full summary panel takes
+// over. Hidden if status === 'error' to avoid stale state alongside the
+// error banner.
+const showLatestCrop = computed(() =>
+  job.value.latest_animal_crop
+  && job.value.status !== 'done'
+  && job.value.status !== 'error',
+)
+const latestCropUrl = computed(() =>
+  job.value.latest_animal_crop
+    ? imageUrl(job.value.latest_animal_crop.crop_gcs_path)
+    : '',
 )
 
 function formatElapsed(s) {
@@ -518,6 +685,7 @@ function reset() {
   elapsedSec.value      = null
   processingStart.value = null
   showLog.value         = false
+  seenCrops.value       = []
 }
 
 // Auto-scroll log
@@ -736,17 +904,6 @@ onUnmounted(() => {
   background: var(--surface2);
 }
 
-.progress__hint {
-  margin: 0;
-  padding: 8px 12px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-muted);
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
 /* Stage bars */
 .progress__stages { display: flex; flex-direction: column; gap: 8px; }
 
@@ -851,68 +1008,122 @@ onUnmounted(() => {
   margin-left: auto;
 }
 
-.summary__species {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.summary__species-chip {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-
-.summary__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 220px;
+/* Post-completion crop gallery — shows every animal crop the
+   streaming pipeline surfaced during the run. Auto-fit grid so the
+   layout adapts to the modal width without manual breakpoints. */
+.summary__crops {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 6px;
+  max-height: 260px;
   overflow-y: auto;
+  padding: 4px;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--surface);
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 
-.summary__row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 10px;
-  font-size: 12px;
-  border-bottom: 1px solid var(--border);
+.summary__crop {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
-.summary__row:last-child { border-bottom: none; }
+.summary__crop-img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--surface2);
+}
 
-.summary__filename {
+.summary__crop-label {
+  font-size: 11px;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
-.summary__label {
+/* Pie-chart summary panels */
+.summary__charts {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.summary__chart {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.summary__chart-title {
+  margin: 0;
   font-size: 11px;
-}
-
-.summary__label--empty {
+  font-weight: 600;
   color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
-.summary__score {
+.summary__chart-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.pie {
+  width: 110px;
+  height: 110px;
+  flex-shrink: 0;
+}
+
+.summary__legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  max-height: 140px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.summary__legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.summary__legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.summary__legend-label {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.summary__legend-count {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
-  min-width: 32px;
-  text-align: right;
+  flex-shrink: 0;
 }
 
 .progress__details-toggle {
@@ -931,5 +1142,55 @@ onUnmounted(() => {
 .progress__details-toggle:hover {
   color: var(--text);
   text-decoration: underline;
+}
+
+/* Streaming "latest classification" thumbnail panel */
+.latest-crop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.latest-crop__img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: var(--radius);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.latest-crop__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.latest-crop__heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.latest-crop__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--animal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.latest-crop__score {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 </style>
