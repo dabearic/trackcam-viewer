@@ -136,7 +136,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { apiFetch } from '../firebase.js'
 

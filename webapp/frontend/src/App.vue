@@ -51,7 +51,7 @@
         >Filters</button>
         <button class="app-header__process-btn" @click="showProcess = true">+ Add Photos</button>
         <button v-if="currentUser" class="app-header__user-btn" :title="`Sign out ${currentUser.email}`" @click="handleSignOut">
-          <img v-if="currentUser.photoURL" :src="currentUser.photoURL" class="app-header__avatar" referrerpolicy="no-referrer" />
+          <img v-if="currentUser.photoURL" :src="currentUser.photoURL" class="app-header__avatar" referrerpolicy="no-referrer" alt="User Avatar" />
           <span v-else>{{ currentUser.email }}</span>
         </button>
       </div>
@@ -232,18 +232,6 @@ function _updateDateBounds(preds) {
 }
 
 // ── Filtering & grouping ──────────────────────────────────────────────────────
-
-function getCategory(pred) {
-  const name = pred.prediction?.common_name?.toLowerCase()
-  if (!name) return 'unknown'
-  if (name === 'blank') return 'blank'
-  if (name === 'human') return 'human'
-  if (name === 'vehicle') return 'vehicle'
-  const hasAnimalDetection = pred.detections?.some(d => d.category === '1')
-  if (hasAnimalDetection) return 'animal'
-  return 'animal'
-}
-
 // All categories present on a prediction. Detections drive the multi-category
 // case (e.g. an image with both a human and an animal detection); the image-
 // level prediction adds blank/human/vehicle when it disagrees with detections,

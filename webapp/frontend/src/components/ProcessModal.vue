@@ -279,7 +279,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { AUTH_ENABLED, apiFetch, imageUrl } from '../firebase.js'
 
@@ -298,7 +298,7 @@ const locationError = ref('')
 const latitude     = ref(null)
 const longitude    = ref(null)
 const submitError  = ref('')
-// True while submit() is in flight. Without this, a double-click (or pressing
+// True while submit() is in flight. Without this, a double click (or pressing
 // Enter twice quickly) re-enters submit() before the prepare request returns,
 // which mints a second job and uploads everything again — visible as the
 // upload counter ticking past uploadTotal.
@@ -449,7 +449,7 @@ const speciesSlices = computed(() =>
 // while running or on error.
 const showLog = ref(false)
 
-function capitalize(s) {
+function capitalize(s: string) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
 }
 
@@ -470,7 +470,7 @@ const latestCropUrl = computed(() =>
     : '',
 )
 
-function formatElapsed(s) {
+function formatElapsed(s: string) {
   const m = Math.floor(s / 60)
   const r = s % 60
   return `${m}:${String(r).padStart(2, '0')}`
@@ -491,11 +491,11 @@ function stopElapsed() {
 
 // ── File handling (cloud) ─────────────────────────────────────────────────────
 
-function onFileChange(e) {
+function onFileChange(e: Event) {
   files.value = Array.from(e.target.files)
 }
 
-function onDrop(e) {
+function onDrop(e: Event) {
   dragging.value = false
   files.value = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'))
 }
@@ -877,8 +877,6 @@ onUnmounted(() => {
 }
 
 .progress__dot--running { background: var(--vehicle); animation: pulse 1.2s infinite; }
-.progress__dot--done    { background: var(--animal); }
-.progress__dot--error   { background: #f87171; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }

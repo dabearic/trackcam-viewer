@@ -288,7 +288,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import exifr from 'exifr'
 import DetectionCrop from './DetectionCrop.vue'
@@ -538,7 +538,7 @@ function closeEditor() {
   editorBusy.value = false
 }
 
-async function onEditorSave(payload) {
+async function onEditorSave(payload: { category: any; label: any; scientific: any; conf: any; applyToAll: any }) {
   if (!editingDet.value) return
   editorBusy.value = true
   editorError.value = ''
@@ -657,7 +657,7 @@ function cancelDraw() {
   drawEnd.value = null
 }
 
-function onDrawDown(e) {
+function onDrawDown(e: MouseEvent) {
   if (!drawMode.value || e.button !== 0) return
   const p = mouseToNormalised(e)
   if (!p) return
@@ -669,13 +669,13 @@ function onDrawDown(e) {
   window.addEventListener('mouseup',   onDrawUp)
 }
 
-function onDrawMove(e) {
+function onDrawMove(e: MouseEvent) {
   if (!drawStart.value) return
   const p = mouseToNormalised(e)
   if (p) drawEnd.value = p
 }
 
-function onDrawUp(e) {
+function onDrawUp(e: MouseEvent) {
   window.removeEventListener('mousemove', onDrawMove)
   window.removeEventListener('mouseup',   onDrawUp)
   if (!drawStart.value || !drawEnd.value) {

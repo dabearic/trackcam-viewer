@@ -56,7 +56,7 @@
         class="filterbar__range"
         :value="filters.minConfidence"
         min="0" max="100" step="5"
-        @input="emit('update', { minConfidence: +$event.target.value })"
+        @input="emit('update', { minConfidence: $event.target.value })"
       />
     </div>
 
@@ -137,11 +137,11 @@
   </aside>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 
 const props = defineProps({
-  species: Array,
+  species: Array<string>,
   folders: { type: Array, default: () => [] },
   filters: Object,
   total: Number,
@@ -153,20 +153,20 @@ const props = defineProps({
 const emit = defineEmits(['update'])
 
 const speciesInput = ref(null)
-const speciesQuery = ref(capitalize(props.filters.species))
-const speciesOpen  = ref(false)
+const speciesQuery = ref<string>(capitalize(props.filters.species))
+const speciesOpen  = ref<boolean>(false)
 
 watch(() => props.filters.species, (sp) => {
   if (!speciesOpen.value) speciesQuery.value = capitalize(sp)
 })
 
-const filteredSpecies = computed(() => {
+const filteredSpecies = computed((): Array<string> => {
   const q = speciesQuery.value.trim().toLowerCase()
   const selectedDisplay = capitalize(props.filters.species).toLowerCase()
   // When the input still shows the current selection, list everything so the
   // user can browse without having to clear first.
   if (!q || q === selectedDisplay) return props.species
-  return props.species.filter(s => s.toLowerCase().includes(q))
+  return props.species.filter((s: string) => s.toLowerCase().includes(q))
 })
 
 function onSpeciesFocus(e) {
@@ -180,7 +180,7 @@ function closeSpecies() {
   speciesInput.value?.blur()
 }
 
-function selectSpecies(s) {
+function selectSpecies(s: string) {
   emit('update', { species: s })
   speciesQuery.value = capitalize(s)
   speciesOpen.value = false

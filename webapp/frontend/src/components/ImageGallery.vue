@@ -46,7 +46,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { imageUrl } from '../firebase.js'
 const props = defineProps({ events: Array })
 defineEmits(['select', 'day-select', 'delete'])

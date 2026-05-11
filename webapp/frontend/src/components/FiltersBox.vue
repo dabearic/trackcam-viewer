@@ -1,21 +1,17 @@
-<script setup>
+<script setup lang="ts" >
+
+import {ref, defineEmits, defineProps, useTemplateRef} from 'vue'
 import FilterSlider from "./FilterSlider.vue";
-import {ref, computed, defineEmits, defineProps} from 'vue'
 
 const props = defineProps(['filterTypes'])
 const emit = defineEmits(['styles-update'])
 const styles = ref({})
-const show = ref(false)
+const sliders = useTemplateRef('sliders')
 
-
-function update_style(src) {
+function update_style(src: string) {
   styles.value[src[0]] = src[1]
   const filtersString =  Object.values(styles.value).reduce((r, c) => r + " " + c, "")
   emit("styles-update",{filter: filtersString})
-}
-
-function toggleShow(){
-  show.value = !show.value;
 }
 
 </script>
@@ -23,19 +19,18 @@ function toggleShow(){
 <template>
   <div id="main">
 
-    <FilterSlider class="indiv-filter" v-for="(filter) in props.filterTypes" :name="filter" ref="sliders"
+    <FilterSlider class="individual-filter" v-for="(filter) in props.filterTypes" :name="filter" ref="sliders"
                   @style-update="(newStyle)=>update_style(newStyle)"/>
-    <button class="modal__delete" id="reset-button" @click="(e)=>$refs.sliders.forEach((slider)=>slider.resetValue())" >Reset All</button>
+    <button class="modal__delete" id="reset-button"
+            @click="_e=>sliders.forEach((slider)=>slider.resetValue())" >
+      Reset All</button>
       </div>
 
 </template>
 
 <style scoped>
 
-.main {
-  min-width: 260px;
-}
-.indiv-filter{
+.individual-filter{
   min-width:260px;
 }
 #reset-button {
