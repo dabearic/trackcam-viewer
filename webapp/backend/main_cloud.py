@@ -244,7 +244,7 @@ async def prepare_upload(
         }
 
     # Dedupe — skip GCS paths that already have a prediction doc
-    existing   = _existing_gcs_paths(uid)
+    existing   = _existing_gcs_paths(uid, [u["gcs_path"] for u in uploads])
     new_paths  = [u["gcs_path"] for u in uploads if u["gcs_path"] not in existing]
     skipped    = len(uploads) - len(new_paths)
     new_upload_set = set(new_paths)
@@ -361,9 +361,34 @@ async def list_jobs(uid: str = Depends(verify_token)):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _existing_gcs_paths(uid: str) -> set[str]:
-    docs = _db.collection("users").document(uid).collection("predictions").stream()
-    return {d.to_dict().get("gcs_path", "") for d in docs}
+def _existing_gcs_paths(uid: str, candidate_paths: list[str]) -> set[str]:
+    """Return the subset of `candidate_paths` that already have a prediction
+    doc in Firestore. Used by /api/upload/prepare to dedupe uploads.
+
+    Each prediction doc lives at `users/{uid}/predictions/{md5(gcs_path)}`
+    (see how job.py mints the ID), so we can flip the scan around: instead
+    of streaming every doc the user has ever made and checking each
+    gcs_path against the upload list, build the candidate doc IDs from
+    the upload list and batch-fetch only those refs. Reads change from
+    O(|history|) to O(|upload|) — for a user with 10K predictions
+    uploading 100 photos that's 100 reads instead of 10K, roughly 50×
+    cheaper in both latency and Firestore billing.
+    """
+    if not candidate_paths:
+        return set()
+    pred_col = _db.collection("users").document(uid).collection("predictions")
+    # Map each doc-id back to its source path so we can recover the
+    # human-readable path from a snapshot without reading the doc body.
+    id_to_path = {
+        hashlib.md5(p.encode()).hexdigest(): p
+        for p in candidate_paths
+    }
+    refs = [pred_col.document(doc_id) for doc_id in id_to_path]
+    return {
+        id_to_path[snap.id]
+        for snap in _db.get_all(refs)
+        if snap.exists
+    }
 
 
 def _safe_folder(name: str) -> str:
