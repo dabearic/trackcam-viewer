@@ -450,11 +450,15 @@ def main():
         # image.
         speciesnet_batch_size = os.environ.get("SPECIESNET_BATCH_SIZE", "8")
         speciesnet_run_mode   = os.environ.get("SPECIESNET_RUN_MODE", "multi_thread")
-        set_status(
-            "running",
-            f"Running SpeciesNet inference (batch_size={speciesnet_batch_size}, "
-            f"run_mode={speciesnet_run_mode})…",
+        # The flag values are interesting for post-mortem analysis but
+        # meaningless to end users — keep them in Cloud Logging only,
+        # not in the user-facing status message.
+        print(
+            f"[config] batch_size={speciesnet_batch_size} "
+            f"run_mode={speciesnet_run_mode}",
+            flush=True,
         )
+        set_status("running", "Running SpeciesNet inference…")
 
         # ── Run SpeciesNet ────────────────────────────────────────────────────
         cmd = [
