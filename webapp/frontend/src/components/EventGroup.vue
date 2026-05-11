@@ -30,7 +30,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { imageUrl } from '../firebase.js'
 defineProps({ event: Object })
 defineEmits(['select'])

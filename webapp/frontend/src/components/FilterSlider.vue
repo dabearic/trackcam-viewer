@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
   import {ref, computed, watch, capitalize, defineExpose} from 'vue'
   const props = defineProps(['name'])
   const emit = defineEmits(["style-update"])
@@ -19,7 +19,8 @@
 
 <template>
   <div>
-    <label>{{capitalize(name)}}: {{filter_ratio.toFixed(2)}}</label><br/>
+    <label>{{capitalize(name)}}: {{filter_ratio.toFixed(2)}}</label>
+    <br/>
     <input type="range" class="effect-slider-{{name}}" max="1.0" min="-1.0" step=".05" v-model.number="filter_ratio">
   </div>
 </template>

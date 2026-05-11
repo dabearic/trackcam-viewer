@@ -134,7 +134,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, reactive, computed } from 'vue'
 
 const preview  = reactive({ src: null, x: 0, y: 0 })
@@ -337,7 +337,7 @@ function bboxStyle(top) {
   }
 }
 
-function formatTimestamp(ts) {
+function formatTimestamp(ts: string) {
   if (!ts || ts.length < 8) return ''
   const y = ts.slice(0, 4), mo = ts.slice(4, 6), d = ts.slice(6, 8)
   return `${y}-${mo}-${d}`
@@ -519,8 +519,6 @@ function formatTimestamp(ts) {
   cursor: pointer;
   transition: opacity 0.1s;
 }
-.histogram__bar--zero { fill: var(--border); opacity: 0.4; }
-.histogram__bar--hover { opacity: 1; fill: #4ade80; }
 .histogram__labels {
   display: flex;
   justify-content: space-between;

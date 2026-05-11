@@ -77,7 +77,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
 
 const props = defineProps({ day: Object })
@@ -98,20 +98,20 @@ const DETECTION_LABEL = { '1': 'animal', '2': 'human', '3': 'vehicle' }
 const DAY_NAMES   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
-function formatDate(d) {
+function formatDate(d: Date): string{
   if (!d) return ''
   return `${DAY_NAMES[d.getDay()]} ${d.getDate()} ${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`
 }
 
-function capitalize(s) {
+function capitalize(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
 }
 
-function pct(value, total) {
+function pct(value: number, total: number): number {
   return total > 0 ? Math.round((value / total) * 100) : 0
 }
 
-function toSlices(counts) {
+function toSlices(counts: Map<string, number>) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
   if (total === 0) return []
   let offset = 0
@@ -126,7 +126,7 @@ function toSlices(counts) {
     })
 }
 
-function getCategory(img) {
+function getCategory(img: { prediction: { common_name: string } }): string {
   const name = img.prediction?.common_name?.toLowerCase()
   if (!name) return 'unknown'
   if (name === 'blank')   return 'blank'
@@ -136,7 +136,7 @@ function getCategory(img) {
 }
 
 const predictionSlices = computed(() => {
-  const counts = {}
+  const counts = new Map<string, number>()
   for (const img of props.day.images) {
     const cat = getCategory(img)
     counts[cat] = (counts[cat] ?? 0) + 1
@@ -145,7 +145,7 @@ const predictionSlices = computed(() => {
 })
 
 const detectionSlices = computed(() => {
-  const counts = {}
+  const counts = new Map<string, number>()
   for (const img of props.day.images) {
     for (const det of img.detections ?? []) {
       if (det.conf < 0.7) continue
