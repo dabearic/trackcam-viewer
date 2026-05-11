@@ -13,6 +13,7 @@ import os
 import urllib.parse
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -221,20 +222,34 @@ async def prepare_upload(
         raise HTTPException(status_code=400, detail="No filenames provided")
 
     folder = _safe_folder(req.folder)
-    uploads = []
-    for raw_name in req.filenames:
-        filename = Path(raw_name).name  # strip any path component
-        if Path(filename).suffix.lower() not in IMAGE_EXTS:
-            continue
+    filenames = [
+        Path(raw_name).name  # strip any path component
+        for raw_name in req.filenames
+        if Path(raw_name).suffix.lower() in IMAGE_EXTS
+    ]
+
+    # Sign URLs in parallel. generate_signed_url with explicit
+    # service_account_email + access_token uses the IAM signBlob API
+    # (~150ms per call) because Cloud Run's compute-engine creds can't
+    # sign locally. Serialized, a 100-file batch spent ~15s here before
+    # uploads could even start. Pull the access token once, then fan
+    # out so total prep time is bounded by one round-trip plus the
+    # number of batches the pool serializes through.
+    sign_kwargs = _sign_kwargs()
+
+    def _sign_one(filename: str) -> dict:
         gcs_path = f"images/{uid}/{folder}/{filename}"
         url = _bucket.blob(gcs_path).generate_signed_url(
             expiration=timedelta(minutes=30),
             method="PUT",
             content_type="image/jpeg",
             version="v4",
-            **_sign_kwargs(),
+            **sign_kwargs,
         )
-        uploads.append({"filename": filename, "gcs_path": gcs_path, "url": url})
+        return {"filename": filename, "gcs_path": gcs_path, "url": url}
+
+    with ThreadPoolExecutor(max_workers=32) as ex:
+        uploads = list(ex.map(_sign_one, filenames))
 
     if not uploads:
         return {
