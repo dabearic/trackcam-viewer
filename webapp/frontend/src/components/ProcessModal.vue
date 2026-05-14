@@ -30,7 +30,7 @@
             multiple
             accept="image/*"
             class="field__file-hidden"
-            @change="onFileChange"
+            @change="onFileChange($event)"
           />
           <div class="field">
             <label class="field__label">Folder name <span class="field__hint">organises images in storage</span></label>
@@ -181,11 +181,11 @@
             >
               <span class="summary__filename" :title="img.filename">{{ img.filename }}</span>
               <span
-                v-if="img.category"
-                :class="`badge badge--${img.category} summary__label`"
-              >{{ img.common_name ? capitalize(img.common_name) : img.category }}</span>
+                v-if="img?.prediction.classification"
+                :class="`badge badge--${img?.prediction.classification} summary__label`"
+              >{{ img.prediction.label() }}</span>
               <span v-else class="summary__label summary__label--empty">—</span>
-              <span v-if="img.score" class="summary__score">{{ Math.round(img.score * 100) }}%</span>
+              <span v-if="img.prediction.score" class="summary__score">{{ Math.round(img.prediction.score * 100) }}%</span>
             </li>
           </ul>
         </section>
@@ -223,8 +223,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import {ref, computed, watch, nextTick, onUnmounted, Ref} from 'vue'
 import { AUTH_ENABLED, apiFetch } from '../firebase.js'
+import { Job } from "../model/model.js"
 
 const emit = defineEmits(['close', 'done'])
 
@@ -259,7 +260,7 @@ const uploadPct   = computed(() =>
 
 // Job polling
 const jobId = ref(null)
-const job   = ref({ status: 'running', message: 'Queued', log: [], progress: {} })
+const job: Ref<Job>   = ref({ status: 'running', message: 'Queued', log: [], progress: {} } as Job)
 const logEl = ref(null)
 let pollTimer = null
 
@@ -304,8 +305,8 @@ const showWaitingHint = computed(() =>
 )
 
 function formatElapsed(s: string) {
-  const m = Math.floor(s / 60)
-  const r = s % 60
+  const m = Math.floor(Number(s) / 60)
+  const r = Number(s) % 60
   return `${m}:${String(r).padStart(2, '0')}`
 }
 
@@ -325,12 +326,14 @@ function stopElapsed() {
 // ── File handling (cloud) ─────────────────────────────────────────────────────
 
 function onFileChange(e: Event) {
-  files.value = Array.from(e.target.files)
+  const target = e.target as HTMLInputElement
+  files.value = Array.from(target.files)
 }
 
-function onDrop(e: Event) {
+function onDrop(dropped: File[] | null) {
   dragging.value = false
-  files.value = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'))
+  if(dropped)
+      files.value = Array.from(dropped).filter(f => f.type.startsWith('image/'))
 }
 
 // ── Local folder browse ───────────────────────────────────────────────────────
@@ -393,10 +396,12 @@ async function submitCloud() {
     folder:    folder.value.trim(),
     filenames: files.value.map(f => f.name),
   }
-  if (country.value)        body.country       = country.value.toUpperCase()
-  if (admin1Region.value)   body.admin1_region = admin1Region.value.toUpperCase()
-  if (latitude.value  != null) body.latitude    = latitude.value
-  if (longitude.value != null) body.longitude   = longitude.value
+  if (country.value)      body['country']       = country.value.toUpperCase()
+  if (admin1Region.value) body['admin1_region']  = admin1Region.value.toUpperCase()
+  if (latitude.value  != null && longitude.value != null) {
+    body['latitude']  = latitude.value
+    body['longitude'] = longitude.value
+  }
 
   const prepRes  = await apiFetch('/api/upload/prepare', {
     method: 'POST',
@@ -413,8 +418,8 @@ async function submitCloud() {
     job.value = {
       status: 'done',
       message: prepData.message ?? 'Nothing to do',
-      log: [], progress: {},
-    }
+      log: [], progress: {}
+    } as Job
     phase.value = 'processing'
     return
   }
@@ -466,11 +471,13 @@ async function submitCloud() {
 }
 
 async function submitLocal() {
-  const body = { folder: folder.value }
-  if (country.value)      body.country       = country.value.toUpperCase()
-  if (admin1Region.value) body.admin1_region  = admin1Region.value.toUpperCase()
-  if (latitude.value  != null) body.latitude  = latitude.value
-  if (longitude.value != null) body.longitude = longitude.value
+  let body = { folder: folder.value }
+  if (country.value)      body['country']       = country.value.toUpperCase()
+  if (admin1Region.value) body['admin1_region']  = admin1Region.value.toUpperCase()
+  if (latitude.value  != null && longitude.value != null) {
+    body['latitude']  = latitude.value
+    body['longitude'] = longitude.value
+  }
 
   const res  = await fetch('/api/process', {
     method: 'POST',
@@ -509,7 +516,7 @@ async function pollJob() {
 function reset() {
   phase.value      = 'form'
   jobId.value      = null
-  job.value        = { status: 'running', message: 'Queued', log: [], progress: {} }
+  job.value        = { status: 'running', message: 'Queued', log: [], progress: {}} as Job
   files.value      = []
   uploadDone.value = 0
   uploadTotal.value = 0

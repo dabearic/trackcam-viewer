@@ -2,9 +2,9 @@
   <aside class="filterbar">
     <div v-if="folders.length" class="filterbar__section">
       <label class="filterbar__label">Folder</label>
-      <select class="filterbar__select" :value="filters.folder" @change="emit('update', { folder: $event.target.value })">
+      <select class="filterbar__select" :value="filters.folder" @change="emit('update', { folder: $event.target })">
         <option value="">All folders</option>
-        <option v-for="f in folders" :key="f" :value="f">{{ f }}</option>
+        <option v-for="f in folders" :key="f.label()" :value="f">{{ f.label() }}</option>
       </select>
     </div>
 
@@ -26,21 +26,21 @@
           type="button"
           class="filterbar__combo-clear"
           title="Clear species filter"
-          @mousedown.prevent="selectSpecies('')"
+          @mousedown.prevent="selectSpecies(null)"
         >✕</button>
         <ul v-if="speciesOpen" class="filterbar__combo-list">
           <li
             class="filterbar__combo-item"
             :class="{ 'is-active': filters.species === '' }"
-            @mousedown.prevent="selectSpecies('')"
+            @mousedown.prevent="selectSpecies(null)"
           >All species</li>
           <li
             v-for="s in filteredSpecies"
-            :key="s"
+            :key="s.common_name"
             class="filterbar__combo-item"
             :class="{ 'is-active': filters.species === s }"
             @mousedown.prevent="selectSpecies(s)"
-          >{{ capitalize(s) }}</li>
+          >{{ capitalize(s.common_name) }}</li>
           <li v-if="filteredSpecies.length === 0" class="filterbar__combo-empty">No matches</li>
         </ul>
       </div>
@@ -56,7 +56,7 @@
         class="filterbar__range"
         :value="filters.minConfidence"
         min="0" max="100" step="5"
-        @input="emit('update', { minConfidence: $event.target.value })"
+        @input="emit('update', { minConfidence: $event.target['value'] })"
       />
     </div>
 
@@ -66,17 +66,17 @@
         type="date"
         class="filterbar__date"
         :value="filters.dateFrom"
-        :min="dateFromMin"
+        :min="dateFromMin as any"
         :max="filters.dateTo || dateToMax"
-        @change="emit('update', { dateFrom: $event.target.value })"
+        @change="emit('update', { dateFrom: $event.target['value'] })"
       />
       <input
         type="date"
         class="filterbar__date"
         :value="filters.dateTo"
         :min="filters.dateFrom || dateFromMin"
-        :max="dateToMax"
-        @change="emit('update', { dateTo: $event.target.value })"
+        :max="dateToMax.toString()"
+        @change="emit('update', { dateTo: $event.target['value'] })"
       />
     </div>
 
@@ -139,15 +139,16 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import {Area, CameraPosition, Taxon} from "../model/model.ts";
 
 const props = defineProps({
-  species: Array<string>,
-  folders: { type: Array, default: () => [] },
+  species: Array<Taxon>,
+  folders: { type: Array<CameraPosition>, default: () => [] },
   filters: Object,
   total: Number,
   filtered: Number,
-  dateFromMin: String,
-  dateToMax: String,
+  dateFromMin: Date,
+  dateToMax: Date,
 })
 
 const emit = defineEmits(['update'])
@@ -160,13 +161,13 @@ watch(() => props.filters.species, (sp) => {
   if (!speciesOpen.value) speciesQuery.value = capitalize(sp)
 })
 
-const filteredSpecies = computed((): Array<string> => {
+const filteredSpecies = computed((): Array<Taxon> => {
   const q = speciesQuery.value.trim().toLowerCase()
   const selectedDisplay = capitalize(props.filters.species).toLowerCase()
   // When the input still shows the current selection, list everything so the
   // user can browse without having to clear first.
   if (!q || q === selectedDisplay) return props.species
-  return props.species.filter((s: string) => s.toLowerCase().includes(q))
+  return props.species.filter((s: Taxon) => s.common_name.toLowerCase().indexOf(q) > 0)
 })
 
 function onSpeciesFocus(e) {
@@ -180,9 +181,9 @@ function closeSpecies() {
   speciesInput.value?.blur()
 }
 
-function selectSpecies(s: string) {
+function selectSpecies(s: Taxon) {
   emit('update', { species: s })
-  speciesQuery.value = capitalize(s)
+  speciesQuery.value = capitalize(s.common_name)
   speciesOpen.value = false
   speciesInput.value?.blur()
 }
@@ -190,7 +191,7 @@ function selectSpecies(s: string) {
 function commitFirstMatch() {
   const match = filteredSpecies.value[0]
   if (match) selectSpecies(match)
-  else selectSpecies('')
+  else selectSpecies(null)
 }
 
 function onDocClick(e) {
@@ -212,7 +213,7 @@ const CATEGORIES = [
 
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
-function capitalize(s) {
+function capitalize(s:string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
 }
 

@@ -51,7 +51,7 @@
         max="100"
         step="1"
         :value="Math.round(conf * 100)"
-        @input="conf = Number($event.target.value) / 100"
+        @input="conf = Number($event.target['value']) / 100"
         class="det-editor__slider"
       />
     </div>
@@ -98,6 +98,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import SpeciesPicker from './SpeciesPicker.vue'
+import {Kind, Taxon} from "../model/model.ts";
 
 const CATEGORY_OPTIONS = [
   { value: '1', label: 'Animal',  color: '#4ade80' },
@@ -108,8 +109,8 @@ const CATEGORY_OPTIONS = [
 const props = defineProps({
   mode: { type: String, default: 'edit' },           // 'edit' | 'add'
   detection: { type: Object, default: null },         // existing det for edit
-  topFive:    { type: Array, default: () => [] },
-  flatSpecies:{ type: Array, default: () => [] },
+  topFive:    { type: Map<Kind, number>, default: () => {} },
+  flatSpecies:{ type: Array<Taxon>, default: () => [] },
   addCustom:  { type: Function, required: true },
   busy:       { type: Boolean, default: false },
   error:      { type: String, default: '' },

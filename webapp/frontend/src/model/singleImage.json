@@ -1,0 +1,69 @@
+{
+  "filepath": "C:/Users/dabea/Downloads/Photos-4-001/20260409205154_IM_00066.JPG",
+  "classifications": {
+    "classes": [
+      "aaf3b049-36e6-46dd-9a07-8a580e9618b7;mammalia;carnivora;canidae;canis;latrans;coyote",
+      "5c7ce479-8a45-40b3-ae21-7c97dfae22f5;mammalia;artiodactyla;cervidae;odocoileus;virginianus;white-tailed deer",
+      "ffe603fc-4920-4302-96d0-65f708bd5b2d;mammalia;carnivora;canidae;urocyon;cinereoargenteus;grey fox",
+      "15abc3f7-7155-450e-a590-1730ee9a1adb;mammalia;carnivora;canidae;canis;aureus;golden jackal",
+      "ba76d46e-25de-45e2-90a8-bd279b650f7c;mammalia;carnivora;felidae;lynx;rufus;bobcat"
+    ],
+    "scores": [
+      0.988,
+      0.0014,
+      0.0012,
+      0.0011,
+      0.0006
+    ]
+  },
+  "detections": [
+    {
+      "category": "1",
+      "label": "animal",
+      "conf": 0.8762,
+      "bbox": [
+        0.5747,
+        0.5727,
+        0.0594,
+        0.0644
+      ]
+    },
+    {
+      "category": "1",
+      "label": "animal",
+      "conf": 0.0281,
+      "bbox": [
+        0.0,
+        0.8194,
+        0.0172,
+        0.1505
+      ]
+    },
+    {
+      "category": "1",
+      "label": "animal",
+      "conf": 0.0231,
+      "bbox": [
+        0.0,
+        0.5843,
+        0.0193,
+        0.3861
+      ]
+    },
+    {
+      "category": "1",
+      "label": "animal",
+      "conf": 0.014,
+      "bbox": [
+        0.8094,
+        0.2278,
+        0.0104,
+        0.0204
+      ]
+    }
+  ],
+  "prediction": "aaf3b049-36e6-46dd-9a07-8a580e9618b7;mammalia;carnivora;canidae;canis;latrans;coyote",
+  "prediction_score": 0.988,
+  "prediction_source": "classifier",
+  "model_version": "4.0.2a"
+}
