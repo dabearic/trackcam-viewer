@@ -3,8 +3,8 @@
     <template v-for="event in events" :key="event.timestamp">
       <!-- Date/time header spanning all columns -->
       <div class="gallery__header">
-        <button class="gallery__date" @click="$emit('day-select', dayData(event))">{{ formatDate(event.date) }}</button>
-        <span class="gallery__time">{{ formatTime(event.date) }}</span>
+        <button class="gallery__date" @click="$emit('day-select', dayData(event))">{{ formatDate(event.timestamp) }}</button>
+        <span class="gallery__time">{{ formatTime(event.timestamp.toDateString()) }}</span>
         <span class="gallery__count">{{ event.images.length }} image{{ event.images.length !== 1 ? 's' : '' }}</span>
       </div>
 
@@ -25,10 +25,10 @@
           />
           <div class="gallery__badge-row">
             <span
-              v-for="det in detectionCounts(img)"
-              :key="`${det.category}|${det.name}`"
-              :class="`badge badge--${det.category}`"
-            >{{ det.name }}: {{ det.count }}</span>
+              v-for="det in img.badges().entries()"
+              :key="`${det[1]}|${det[0]}`"
+              :class="`badge badge--${det[0]}`"
+            >{{ det[0] }}: {{ det[1] }}</span>
           </div>
         </button>
         <button
@@ -48,14 +48,18 @@
 
 <script setup lang="ts">
 import { imageUrl } from '../firebase.js'
-const props = defineProps({ events: Array })
+import {ImageInfo} from '../model/model.ts'
+const props = defineProps({ events: Array<DayGroup> })
 defineEmits(['select', 'day-select', 'delete'])
-
-function dayData(event) {
-  const dayPrefix = event.timestamp.substring(0, 8)
-  const dayEvents = props.events.filter(e => e.timestamp.startsWith(dayPrefix))
+class DayGroup {
+  timestamp: Date
+  images: ImageInfo[]
+}
+function dayData(event: DayGroup) {
+  const dayPrefix = event.timestamp.toDateString()
+  const dayEvents = props.events.filter(e => e.timestamp.toDateString() === dayPrefix)
   return {
-    date: event.date,
+    date: event.timestamp,
     events: dayEvents,
     images: dayEvents.flatMap(e => e.images),
   }
@@ -64,7 +68,7 @@ function dayData(event) {
 const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
-function formatDate(d) {
+function formatDate(d: Date): string {
   if (!d) return ''
   return `${DAY_NAMES[d.getDay()]} ${d.getDate()} ${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`
 }
@@ -84,27 +88,7 @@ function capitalize(s) {
 // One badge per (category, species) pair. Animal detections fall back to the
 // generic "animal" name when they have no species label; human/vehicle use
 // the category itself since they aren't speciated.
-function detectionCounts(img) {
-  const counts = new Map()
-  for (const det of img.detections ?? []) {
-    if (det.conf < 0.3) continue
-    const category = CATEGORY_LABEL[det.category] ?? 'unknown'
-    let name = (category === 'animal' && det.label) ? det.label : category
-    if(category === 'animal' && img.prediction && img.prediction.common_name && img.prediction.common_name !== 'human')
-      name = img.prediction.common_name
-    const key = `${category}|${name}`
-    const existing = counts.get(key)
-    if (existing) existing.count++
-    else counts.set(key, { name, category, count: 1 })
-  }
-  if (counts.size === 0) {
-    let name = 'blank'
-    let category = 'blank'
 
-    counts.set('blank', {name, category, count: 1})
-  }
-  return [...counts.values()]
-}
 </script>
 
 <style scoped>

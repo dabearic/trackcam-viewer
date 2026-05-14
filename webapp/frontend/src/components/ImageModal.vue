@@ -62,7 +62,7 @@
           class="modal__editor-dock"
           :mode="editorMode"
           :detection="editingDet"
-          :top-five="topFiveFor(image)"
+          :top-five="image.prediction.top5"
           :flat-species="flatSpecies"
           :add-custom="addCustom"
           :similar-count="similarCount"
@@ -92,7 +92,7 @@
               v-show="imageLoaded"
               :src="imageUrl(image.filepath)"
               :alt="image.filename"
-              :style="filterStyleText.value"
+              :style="filterStyleText"
               class="modal__img"
               draggable="false"
               @load="onImageLoad"
@@ -118,7 +118,7 @@
                 'modal__bbox--editing':  editingDet && det.id === editingDet.id,
               }"
               :style="bboxScreenStyle(det)"
-              :title="`${detectionLabel(det)} ${(det.conf * 100).toFixed(0)}%${det.manual ? ' (manual)' : ''}`"
+              :title="`${detectionLabel(det)} ${(det.confidence * 100).toFixed(0)}%${det.manual ? ' (manual)' : ''}`"
               @click.stop="openEditorForDet(det)"
             >
               <span
@@ -126,7 +126,7 @@
                 :style="{ background: categoryColor(det.category) }"
               >
                 <span v-if="det.manual" class="modal__bbox-manual" title="Manual edit">✎</span>
-                {{ detectionLabel(det) }} {{ (det.conf * 100).toFixed(0) }}%
+                {{ detectionLabel(det) }} {{ (det.confidence * 100).toFixed(0) }}%
               </span>
             </div>
           </div>
@@ -189,46 +189,46 @@
             <h3 class="panel__heading">Prediction</h3>
             <div v-if="image.prediction" class="panel__prediction">
               <span :class="`badge badge--${getCategory(image)}`">
-                {{ capitalize(image.prediction.common_name) }}
+                {{ capitalize(image.prediction.label()) }}
               </span>
-              <span v-if="image.prediction.scientific" class="panel__scientific">
-                {{ image.prediction.scientific }}
+              <span v-if="image.prediction.species()?.scientific" class="panel__scientific">
+                {{ image.prediction.species()?.scientific }}
               </span>
             </div>
             <dl class="panel__meta">
-              <template v-if="image.prediction_score != null">
+              <template v-if="image.prediction.score != null">
                 <dt>Score</dt>
-                <dd>{{ (image.prediction_score * 100).toFixed(1) }}%</dd>
+                <dd>{{ (image.prediction.score * 100).toFixed(1) }}%</dd>
               </template>
-              <template v-if="image.prediction_source">
+              <template v-if="image.prediction.source">
                 <dt>Source</dt>
-                <dd>{{ image.prediction_source }}</dd>
+                <dd>{{ image.prediction.source }}</dd>
               </template>
-              <template v-if="image.model_version">
+              <template v-if="image.prediction.model_version">
                 <dt>Model</dt>
-                <dd>{{ image.model_version }}</dd>
+                <dd>{{ image.prediction.model_version }}</dd>
               </template>
-              <template v-if="image.country">
+              <template v-if="image.cameraPosition.country">
                 <dt>Country</dt>
-                <dd>{{ image.country }}</dd>
+                <dd>{{ image.cameraPosition.country }}</dd>
               </template>
-              <template v-if="image.latitude != null">
+              <template v-if="image.cameraPosition.latitude != null">
                 <dt>Location</dt>
-                <dd>{{ image.latitude.toFixed(4) }}, {{ image.longitude.toFixed(4) }}</dd>
+                <dd>{{ image.cameraPosition.latitude.toFixed(4) }}, {{ image.cameraPosition.longitude.toFixed(4) }}</dd>
               </template>
             </dl>
           </section>
 
           <!-- Top-5 classifications -->
-          <section v-if="image.top5?.length" class="panel__section">
+          <section v-if="image.prediction.top5?.size" class="panel__section">
             <h3 class="panel__heading">Top-5 Classifications</h3>
             <div class="panel__top5">
-              <div v-for="(cls, i) in image.top5" :key="i" class="panel__cls">
-                <span class="panel__cls-name">{{ capitalize(cls.common_name) }}</span>
+              <div v-for="(cls, i) in image.prediction.top5.entries()" :key="i" class="panel__cls">
+                <span class="panel__cls-name">{{ capitalize(Kind.label(cls[0])) }}</span>
                 <div class="panel__cls-bar-wrap">
-                  <div class="panel__cls-bar" :style="{ width: `${cls.score * 100}%` }"></div>
+                  <div class="panel__cls-bar" :style="{ width: `${cls[1] * 100}%` }"></div>
                 </div>
-                <span class="panel__cls-score">{{ (cls.score * 100).toFixed(1) }}%</span>
+                <span class="panel__cls-score">{{ (cls[1] * 100).toFixed(1) }}%</span>
               </div>
             </div>
           </section>
@@ -251,14 +251,14 @@
                 <span class="panel__det-dot" :style="{ background: categoryColor(det.category) }"></span>
                 <span>{{ detectionLabel(det) }}</span>
                 <span v-if="det.manual" class="panel__det-manual" title="Manual edit">✎</span>
-                <span class="panel__det-conf">{{ (det.conf * 100).toFixed(0) }}%</span>
+                <span class="panel__det-conf">{{ (det.confidence * 100).toFixed(0) }}%</span>
               </component>
             </div>
           </section>
 
            <section class="panel__section">
             <ShowHideSection name="Image Adjustment" class="panel__heading" show-by-default="false" onName="+" off-name="-">
-              <FiltersBox :filterTypes="filterTypes" @styles-update="filterStyleText.value=$event"/>
+              <FiltersBox :filterTypes="filterTypes" @styles-update="filterStyleText=$event"/>
             </ShowHideSection>
           </section>
 
@@ -289,21 +289,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import {ref, computed, watch, onMounted, onUnmounted, Ref, ComputedRef} from 'vue'
 import exifr from 'exifr'
+import Options from 'exifr'
 import DetectionCrop from './DetectionCrop.vue'
 import DetectionEditor from './DetectionEditor.vue'
 import { imageUrl, apiFetch } from '../firebase.js'
 import { useSpeciesCatalog } from '../composables/useSpeciesCatalog.js'
 import FiltersBox from "./FiltersBox.vue";
 import ShowHideSection from "./ShowHideSection.vue";
+import {Detection, ImageInfo, Kind} from "../model/model.ts";
 
 const props = defineProps({
-  image: Object,
-  allImages: Array,
+  image: ImageInfo,
+  allImages: Array<ImageInfo>,
   // Full predictions list (not just filtered) so the species tree sees every
   // species ever observed, regardless of current gallery filters.
-  predictions: { type: Array, default: () => [] },
+  predictions: { type: Array<ImageInfo>, default: () => [] },
 })
 const emit = defineEmits(['close', 'navigate', 'deleted', 'detections-changed'])
 
@@ -321,8 +323,8 @@ const editorError     = ref('')
 const editorBusy      = ref(false)
 const drawStart       = ref(null)              // { nx, ny } image-normalised
 const drawEnd         = ref(null)
-const predictionsRef  = computed(() => props.predictions)
-const speciesCatalog  = useSpeciesCatalog(predictionsRef)
+const predictionsRef: Ref<Array<ImageInfo>> = ref(props.predictions)
+const speciesCatalog  = useSpeciesCatalog(predictionsRef.value)
 const { topFive: topFiveFor, flatSpecies, addCustom, loadCustom } = speciesCatalog
 
 const filterTypes = ref(['contrast', 'brightness', 'saturate'])
@@ -389,9 +391,9 @@ const currentIndex = computed(() => props.allImages.indexOf(props.image))
 // panel rows. In view mode we hide noise below 10% confidence; in edit
 // mode we surface every detection so "Apply to all 13" doesn't disagree
 // with what the user can actually see and click on.
-const significantDetections = computed(() => {
+const significantDetections: ComputedRef<Array<Detection>> = computed(() => {
   const all = props.image.detections ?? []
-  return editMode.value ? all : all.filter(d => d.conf >= 0.1)
+  return editMode.value ? all : all.filter(d => d.confidence >= 0.1)
 })
 
 // How many detections share the open editor's category — used for the
@@ -415,7 +417,7 @@ const exifEntries = computed(() => {
     .sort(([a], [b]) => a.localeCompare(b))
 })
 
-function formatExifValue(v) {
+function formatExifValue(v: unknown) {
   if (v instanceof Date) return v.toISOString().replace('T', ' ').slice(0, 19)
   if (Array.isArray(v))  return v.map(formatExifValue).join(', ')
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(4)
@@ -428,7 +430,7 @@ async function loadExif() {
   exifLoading.value = true
   try {
     const url = imageUrl(props.image.filepath)
-    const tags = await exifr.parse(url, { tiff: true, exif: true, gps: true, ifd0: true })
+    const tags = await exifr.parse(url,  true )
     exifTags.value = tags || {}
   } catch (e) {
     exifTags.value = {}
@@ -437,8 +439,8 @@ async function loadExif() {
   }
 }
 
-function getCategory(img) {
-  const name = img.prediction?.common_name?.toLowerCase()
+function getCategory(img: ImageInfo) {
+  const name = img.prediction?.label().toLowerCase()
   if (!name) return 'unknown'
   if (name === 'blank') return 'blank'
   if (name === 'human') return 'human'
@@ -467,7 +469,7 @@ function detectionLabel(det) {
   // for animal-category detections we surface the image's species
   // prediction instead. Skipped for blank/human/vehicle predictions.
   if (det.category === '1') {
-    const name = props.image.prediction?.common_name
+    const name = props.image.prediction?.label()
     if (name && !NON_SPECIES.has(name.toLowerCase())) {
       return capitalize(name)
     }
@@ -583,7 +585,7 @@ async function onEditorSave(payload: { category: any; label: any; scientific: an
       )
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-      const byId = new Map(data.detections.map(d => [d.id, d]))
+      const byId = new Map<string,Detection>(data.detections.map(d => [d.id, d]))
       props.image.detections = (props.image.detections ?? []).map(
         d => byId.get(d.id) || d,
       )

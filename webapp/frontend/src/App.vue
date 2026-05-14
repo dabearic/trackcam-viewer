@@ -146,8 +146,8 @@
   <div v-else class="state-msg">Loading…</div>
 </template>
 
-<script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+<script setup lang="ts">
+import {Ref, reactive, computed, onMounted, ref} from 'vue'
 import FilterBar from './components/FilterBar.vue'
 import ImageGallery from './components/ImageGallery.vue'
 import ImageModal from './components/ImageModal.vue'
@@ -155,31 +155,35 @@ import DaySummary from './components/DaySummary.vue'
 import ProcessModal from './components/ProcessModal.vue'
 import SpeciesView from './components/SpeciesView.vue'
 import { auth, AUTH_ENABLED, apiFetch, signInWithGoogle, signOutUser, onIdTokenChanged } from './firebase.js'
+import firebase from "firebase/compat/app";
+import Timestamp = firebase.firestore.Timestamp;
+import {Area, CameraPosition, Category, ImageInfo, Taxon} from './model/model.ts'
+import User = firebase.User;
 
-const predictions  = ref([])
+const predictions  : Ref<ImageInfo[]> = ref([])
 const loading      = ref(false)
 const error        = ref(null)
-const selectedImage = ref(null)
-const selectedDay  = ref(null)
+const selectedImage: Ref<ImageInfo> = ref(null)
+const selectedDay  : Ref<Date> = ref(null)
 const showProcess  = ref(false)
 const filtersOpen  = ref(false)
 const view         = ref('species')  // 'gallery' | 'species'
-const dataDateFrom = ref('')
-const dataDateTo   = ref('')
+const dataDateFrom : Ref<Date> = ref(null)
+const dataDateTo   : Ref<Date> = ref(null)
 
-const currentUser  = ref(null)
+const currentUser  : Ref<User> = ref(null)
 const authReady    = ref(false)
 const signingIn    = ref(false)
 const signInError  = ref('')
 
 const filters = reactive({
-  folder: '',
-  species: '',
+  folder: null as Area,
+  species: null as Taxon,
   minConfidence: 0,
-  categories: ['animal', 'human', 'vehicle', 'blank', 'unknown'],
+  categories: Object.values(Category),
   categoryMode: 'any',  // 'any' | 'all'
-  dateFrom: '',
-  dateTo: '',
+  dateFrom: null as Date,
+  dateTo: null as Date,
   hour: null,
   month: null,
 })
@@ -200,7 +204,7 @@ async function signIn() {
 
 async function handleSignOut() {
   await signOutUser()
-  predictions.value = []
+  predictions["value"] = []
 }
 
 // ── Data loading ──────────────────────────────────────────────────────────────
@@ -221,8 +225,8 @@ async function loadPredictions() {
   }
 }
 
-function _updateDateBounds(preds) {
-  const dates = preds.map(predDate).filter(Boolean).sort()
+function _updateDateBounds(preds: Array<ImageInfo>) {
+  const dates = preds.map(img => img.taken_at).filter(Boolean).sort()
   if (dates.length) {
     dataDateFrom.value = dates[0]
     dataDateTo.value   = dates[dates.length - 1]
@@ -232,24 +236,23 @@ function _updateDateBounds(preds) {
 }
 
 // ── Filtering & grouping ──────────────────────────────────────────────────────
-// All categories present on a prediction. Detections drive the multi-category
+// All categories present on a prediction. Detections drive the multicategory
 // case (e.g. an image with both a human and an animal detection); the image-
 // level prediction adds blank/human/vehicle when it disagrees with detections,
 // and 'animal' when the species classifier produced a name without a matching
 // detection box. Used by the category filter's "all of" mode.
-function getCategories(pred) {
-  const cats = new Set()
+function getCategories(pred: ImageInfo): Set<Category> {
+  const cats = new Set<Category>()
   for (const d of (pred.detections ?? [])) {
-    if (d.category === '1') cats.add('animal')
-    else if (d.category === '2') cats.add('human')
-    else if (d.category === '3') cats.add('vehicle')
+    if(d.category == Category.ANIMAL || d.category == Category.HUMAN
+        || d.category == Category.VEHICLE)
+      cats.add(d.category)
   }
-  const name = pred.prediction?.common_name?.toLowerCase()
-  if (name === 'blank') cats.add('blank')
-  else if (name === 'human') cats.add('human')
-  else if (name === 'vehicle') cats.add('vehicle')
-  else if (name && cats.size === 0) cats.add('animal')
-  if (cats.size === 0) cats.add('unknown')
+  if(!(pred.prediction.classification instanceof Taxon)) {
+    cats.add(pred.prediction.classification)
+  } else {
+    cats.add(Category.ANIMAL)
+  }
   return cats
 }
 
@@ -260,31 +263,31 @@ const filteredPredictions = computed(() => {
     if (filters.categories.length === 0) return false
     const cats = getCategories(p)
     const matches = filters.categoryMode === 'all'
-      ? filters.categories.every(c => cats.has(c))
-      : filters.categories.some(c => cats.has(c))
+      ? filters.categories.every((c: Category) => cats.has(c))
+      : filters.categories.some((c: Category) => cats.has(c))
     if (!matches) return false
-    if (filters.folder && p.folder !== filters.folder) return false
-    if (filters.species && p.prediction?.common_name !== filters.species) return false
+    if (filters.folder && p.cameraPosition.area !== filters.folder) return false
+    if (filters.species && p.prediction?.classification !== filters.species) return false
     if (filters.species) {
       // Match either image-level prediction OR a manual detection label.
       // Without the second leg, filtering by a species the user only added
       // via single-detection edit would return zero images.
       const matches =
-        p.prediction?.common_name === filters.species ||
-        (p.detections ?? []).some(d => d.manual && d.label === filters.species)
+        p.prediction?.classification === filters.species ||
+        (p.detections ?? []).some(d => d.manual && d.classification === filters.species)
       if (!matches) return false
     }
-    if (filters.minConfidence > 0 && (p.prediction_score ?? 0) < filters.minConfidence / 100) return false
+    if (filters.minConfidence > 0 && (p.prediction?.score ?? 0) < filters.minConfidence / 100) return false
     if (filters.hour !== null) {
-      const h = predHour(p)
+      const h = p.taken_at.getHours()
       if (h !== filters.hour) return false
     }
     if (filters.month !== null) {
-      const m = predMonth(p)
+      const m = p.taken_at.getMonth()
       if (m !== filters.month) return false
     }
     if (from || to) {
-      const date = predDate(p)
+      const date = p.taken_at ? p.taken_at : p.uploaded
       if (!date) return false
       if (from && date < from) return false
       if (to   && date > to)   return false
@@ -296,7 +299,7 @@ const filteredPredictions = computed(() => {
 const groupedEvents = computed(() => {
   const groups = new Map()
   for (const pred of filteredPredictions.value) {
-    const ts = predTs(pred)
+    const ts = pred.taken_at
     if (!ts) continue
     if (!groups.has(ts)) groups.set(ts, [])
     groups.get(ts).push(pred)
@@ -310,24 +313,25 @@ const groupedEvents = computed(() => {
 // image-level inference prediction AND any manually-edited detection
 // labels — without the second source the filter wouldn't surface species
 // the user added by hand until they reloaded against new inference output.
-function _speciesNamesFor(preds) {
-  const names = new Set()
+function _speciesNamesFor(preds: Array<ImageInfo>): Set<Taxon> {
+  const names = new Set<Taxon>()
   for (const p of preds) {
-    if (p.prediction?.common_name) names.add(p.prediction.common_name)
+    if (p.prediction?.isSpecies()) names.add(p.prediction.classification as Taxon)
     for (const d of (p.detections ?? [])) {
-      if (d.manual && d.label) names.add(d.label)
+      if (d.manual && d.classification) names.add(d.classification)
     }
   }
   return names
 }
 
 const allSpecies = computed(() =>
-  [..._speciesNamesFor(predictions.value)].sort(),
+  Array.from(_speciesNamesFor(predictions.value)).sort(),
 )
 
 const allFolders = computed(() => {
-  const folders = predictions.value.map(p => p.folder).filter(Boolean)
-  return [...new Set(folders)].sort()
+  const folders = predictions.value.map(p => p.cameraPosition)
+      .filter(Boolean)
+  return Array.from(new Set<CameraPosition>(folders)).sort()
 })
 
 const stats = computed(() => ({
@@ -336,41 +340,16 @@ const stats = computed(() => ({
   species: _speciesNamesFor(filteredPredictions.value).size,
 }))
 
-function parseTimestamp(ts) {
+function parseTimestamp(ts: string): Date {
   if (!ts || ts.length < 14) return null
   const y = ts.slice(0,4), mo = ts.slice(4,6), d = ts.slice(6,8)
   const h = ts.slice(8,10), mi = ts.slice(10,12), s = ts.slice(12,14)
   return new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`)
 }
 
-// Compact 14-char timestamp (YYYYMMDDHHMMSS) preferred from EXIF-derived
-// taken_at, falling back to a YYYYMMDDHHMMSS filename prefix. Returns ''
-// when neither is available.
-function predTs(p) {
-  if (p.taken_at) return p.taken_at.replace(/[-T:]/g, '').slice(0, 14)
-  const m = p.filename?.match(/^(\d{14})/)
-  return m ? m[1] : ''
-}
+function openModal(image: ImageInfo) { selectedImage.value = image }
 
-function predDate(p) {
-  const ts = predTs(p)
-  if (!ts) return ''
-  return `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)}`
-}
-
-function predHour(p) {
-  const ts = predTs(p)
-  return ts.length >= 10 ? parseInt(ts.slice(8, 10), 10) : -1
-}
-
-function predMonth(p) {
-  const ts = predTs(p)
-  return ts.length >= 6 ? parseInt(ts.slice(4, 6), 10) - 1 : -1
-}
-
-function openModal(image) { selectedImage.value = image }
-
-function onImageDeleted(image) {
+function onImageDeleted(image: ImageInfo) {
   const remaining = filteredPredictions.value
   const idx       = remaining.indexOf(image)
   const next      = remaining[idx + 1] ?? remaining[idx - 1] ?? null
@@ -383,7 +362,7 @@ const pendingDelete = ref(null)
 const deleting      = ref(false)
 const deleteError   = ref('')
 
-function requestDelete(image) {
+function requestDelete(image: ImageInfo) {
   pendingDelete.value = image
   deleteError.value   = ''
 }

@@ -157,8 +157,9 @@ function hidePreview() {
 }
 import TreeNode from './TreeNode.vue'
 import { imageUrl } from '../firebase.js'
+import {Detection, ImageInfo, Prediction} from "../model/model.ts";
 
-const props = defineProps({ predictions: Array })
+const props = defineProps({ predictions: Array<ImageInfo> })
 const emit = defineEmits(['select', 'filter'])
 
 const EXCLUDED_LABELS = new Set(['blank', 'no cv result'])
@@ -248,7 +249,7 @@ const speciesCards = computed(() => {
 
   // Gather by species (common name). If the selected node is itself a species,
   // this yields exactly one card.
-  const groups = new Map()
+  const groups = new Map<string, Array<ImageInfo>>()
   for (const pred of node.preds) {
     const name = pred.prediction?.common_name || 'unknown'
     if (EXCLUDED_LABELS.has(name.toLowerCase())) continue
@@ -257,12 +258,13 @@ const speciesCards = computed(() => {
   }
 
   const cards = []
-  for (const [commonName, preds] of groups.entries()) {
+  let entries = groups.entries();
+  for (const [commonName, preds] of entries) {
     const ranked = preds.map(pred => {
       const det = bestDetection(pred)
       const [, , bw = 0, bh = 0] = det?.bbox || []
       const area  = bw * bh
-      const score = pred.prediction_score ?? 0
+      const score = pred.prediction.score ?? 0
       return { pred, det, rank: area * score }
     })
     ranked.sort((a, b) => {
@@ -292,7 +294,7 @@ const speciesCards = computed(() => {
       key: commonName,
       rawName: commonName,
       commonName: capitalize(commonName),
-      scientific: preds[0].prediction?.scientific || '',
+      scientific: preds[0].prediction?.classification['scientific'] || '',
       count: preds.length,
       top,
       hours,
@@ -323,17 +325,20 @@ function bestDetection(pred) {
   return best
 }
 
-function bboxStyle(top) {
-  const [bx, by, bw, bh] = top.bbox
+function bboxStyle(top: Detection) {
+  const bx = top.bbox.minX
+  const by = top.bbox.minY
+  const bw = top.bbox.width
+  const bh = top.bbox.height
   if (!bw || !bh) return {}
   const sizeX = (100 / bw).toFixed(2)
   const sizeY = (100 / bh).toFixed(2)
   const posX  = (bx / (1 - bw) * 100).toFixed(2)
   const posY  = (by / (1 - bh) * 100).toFixed(2)
   return {
-    backgroundImage: `url("${imageUrl(imagePathOf(top.pred))}")`,
+    backgroundImage: `url("${imageUrl(imagePathOf(top.parent))}")`,
     backgroundSize: `${sizeX}% ${sizeY}%`,
-    backgroundPosition: `${isFinite(posX) ? posX : 0}% ${isFinite(posY) ? posY : 0}%`,
+    backgroundPosition: `${isFinite(Number(posX)) ? posX : 0}% ${isFinite(Number(posY)) ? posY : 0}%`,
   }
 }
 
