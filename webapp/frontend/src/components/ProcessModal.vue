@@ -599,11 +599,13 @@ async function submitCloud() {
   // Upload files to GCS. The inference container is already polling for
   // them and will proceed as soon as the last one lands.
   //
-  // Worker pool: N workers pull from a shared cursor. 6 matches the
-  // browser's per-origin HTTP/1.1 connection cap; GCS supports HTTP/2 so
-  // in practice these run multiplexed. Pushing higher gives diminishing
-  // returns and risks throttling on slow uplinks.
-  const CONCURRENCY = 6
+  // Worker pool: N workers pull from a shared cursor. The browser's
+  // HTTP/1.1 per-origin cap is 6, but GCS supports HTTP/2 so requests
+  // multiplex over a shared connection — pushing past 6 is mostly free
+  // as long as the uplink isn't saturated. 12 gives a measurable bump on
+  // typical home/office links (per-PUT latency was ~414 ms on the L4
+  // workload, so 12-way effective rate is ~29 files/sec).
+  const CONCURRENCY = 12
   let cursor = 0
   const uploadOne = async ({ filename, url }) => {
     const file = files.value.find(f => f.name === filename)
