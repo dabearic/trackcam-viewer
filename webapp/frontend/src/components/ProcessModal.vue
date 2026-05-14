@@ -190,11 +190,10 @@
           </header>
 
           <!-- Gallery of every animal crop the streaming pipeline showed
-               while the job was running. The reactive list (`seenCrops`)
-               accumulates each unique latest_animal_crop snapshot during
-               polling, so by the time the user reaches this summary
-               panel they can re-visit every classification at a glance
-               without leaving the dialog. -->
+               while the job was running. The backend appends to a
+               `recent_crops` array on the job doc atomically (ArrayUnion)
+               for every qualifying prediction — see job.py — so this
+               panel just reads the array and renders it. -->
           <div v-if="seenCrops.length" class="summary__crops">
             <div
               v-for="crop in seenCrops"
@@ -370,19 +369,15 @@ const speciesEntries = computed(() =>
     .sort((a, b) => b[1] - a[1])
 )
 
-// Accumulate every distinct latest_animal_crop the polling sees over
-// the course of the job. The backend last-writer-wins update overwrites
-// `latest_animal_crop` each time a qualifying prediction lands, so
-// without this client-side accumulator only the final entry would be
-// available for the post-completion gallery. Deduped by crop_gcs_path
-// in case the same job doc gets re-polled before the field changes.
-const seenCrops = ref([])
-
-watch(() => job.value.latest_animal_crop, (crop) => {
-  if (!crop || !crop.crop_gcs_path) return
-  if (seenCrops.value.some(c => c.crop_gcs_path === crop.crop_gcs_path)) return
-  seenCrops.value.push({ ...crop })
-})
+// Read every qualifying crop the backend has surfaced so far. The job
+// doc carries a `recent_crops` array that the inference job appends to
+// via Firestore ArrayUnion for every animal-with-score≥0.5 prediction —
+// atomic, so concurrent worker writes don't lose entries, and immune
+// to the 2-second polling window (the previous client-side accumulator
+// only saw whichever value happened to be in `latest_animal_crop` at
+// each poll, missing intermediate updates when predictions landed in
+// bursts faster than once per 2s).
+const seenCrops = computed(() => job.value.recent_crops ?? [])
 
 // Pie-chart slices for the post-completion summary. Pure SVG —
 // no chart-library dependency for what's a handful of slices.
@@ -685,7 +680,6 @@ function reset() {
   elapsedSec.value      = null
   processingStart.value = null
   showLog.value         = false
-  seenCrops.value       = []
 }
 
 // Auto-scroll log
