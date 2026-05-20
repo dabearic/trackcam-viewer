@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue'
 import { apiFetch } from '../firebase.js'
-import {Category, ImageInfo, Kind, Taxon} from "../model/model.ts";
+import {Category, ImageInfo, Kind, Source, Taxon} from "../model/model.ts";
 
 /**
  * Builds two views of the species universe for the picker UI:
@@ -61,7 +61,8 @@ export function useSpeciesCatalog(predictionsRef: Array<ImageInfo>) {
     }
     for (const pred of predictionsRef ?? []) {
       for (const [cls, score] of pred.prediction.top5) {
-        add(Kind.label(cls), Kind.getSpecies(cls).scientific, Kind.getSpecies(cls).raw, { source: 'inferred' })
+        if(Kind.getSpecies(cls))
+          add(Kind.label(cls), Kind.getSpecies(cls).scientific, Kind.getSpecies(cls).raw, { source: Source.INFERENCE })
       }
       if (pred.prediction.isSpecies()) {
         const taxon = pred.prediction.classification as Taxon
@@ -70,7 +71,8 @@ export function useSpeciesCatalog(predictionsRef: Array<ImageInfo>) {
       // Detection-level species (manual edits store species directly on the detection)
       for (const det of (pred.detections ?? [])) {
         if (det.label && det.category == Category.ANIMAL) {
-          add(det.label(), det.classification.scientific, '', { source: 'detection' })
+          console.log(det)
+          add(det.label(), det.classification?.scientific, '', { source: 'detection' })
         }
       }
     }

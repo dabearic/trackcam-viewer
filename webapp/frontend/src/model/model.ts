@@ -8,8 +8,10 @@ export enum Category {
     BLANK = 'blank',
 }
 export namespace Category {
-    export function contains(value: string){
-        return Object.values(Category).includes(value.toLowerCase() as Category)
+    export function contains(kindString: string): boolean{
+        if(!kindString)
+            return false
+        return Object.values(Category).includes(kindString.toLowerCase() as Category)
     }
 }
 
@@ -135,11 +137,13 @@ export class Detection {
     parent: ImageInfo
     manual: boolean
     id: `${string}-${string}-${string}-${string}-${string}` = crypto.randomUUID()
+    crop_gcs_path?: string
+
     public label(): string{
         if (this.classification){
             return this.classification.common_name
         } else {
-            return this.category as string
+            return this.category
         }
     }
 }
@@ -179,11 +183,12 @@ export class ImageInfo {
     filename: string
     prediction ?: Prediction
     detections: Detection[]
-    cameraPosition: CameraPosition
-    timestamp: Date
+    cameraPosition?: CameraPosition
+    timestamp?: Date
     taken_at ?: Date
-    uploaded: Date
+    uploaded?: Date
     failures: string[] = []
+    folder?: string
 
     isBlank(): boolean{
         if(this.prediction == null){
@@ -207,17 +212,18 @@ export class ImageInfo {
     }
 
     public badges(): Map<string, number> {
-        let counts = new Map<string, number>
+        let counts = new Map<string, number>()
         for(let det of this.detections){
             if (counts.has(det.label())){
-                counts[det.label()]++
+                counts.set(det.label(), counts.get(det.label()) + 1)
             } else {
-                counts[det.label()] = 1
+                counts.set(det.label(), 1)
             }
         }
         if (!counts.has(this.prediction.label()))
             counts[this.prediction.label()] = 1;
-        return
+
+        return counts
     }
 }
 

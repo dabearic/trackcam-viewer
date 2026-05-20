@@ -159,6 +159,7 @@ import firebase from "firebase/compat/app";
 import Timestamp = firebase.firestore.Timestamp;
 import {Area, CameraPosition, Category, ImageInfo, Taxon} from './model/model.ts'
 import User = firebase.User;
+import {parseJsonImage} from "./model/modelParser.ts";
 
 const predictions  : Ref<ImageInfo[]> = ref([])
 const loading      = ref(false)
@@ -216,10 +217,11 @@ async function loadPredictions() {
     const res = await apiFetch('/api/predictions')
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
-    predictions.value = data.predictions
+    predictions.value = data.predictions.map(parseJsonImage)
     _updateDateBounds(data.predictions)
   } catch (e) {
     error.value = `Failed to load predictions: ${e.message}`
+    console.error(e)
   } finally {
     loading.value = false
   }
@@ -297,9 +299,9 @@ const filteredPredictions = computed(() => {
 })
 
 const groupedEvents = computed(() => {
-  const groups = new Map()
+  const groups = new Map<string, ImageInfo[]>()
   for (const pred of filteredPredictions.value) {
-    const ts = pred.taken_at
+    const ts = pred.taken_at.toDateString()
     if (!ts) continue
     if (!groups.has(ts)) groups.set(ts, [])
     groups.get(ts).push(pred)
@@ -341,13 +343,12 @@ const stats = computed(() => ({
 }))
 
 function parseTimestamp(ts: string): Date {
-  if (!ts || ts.length < 14) return null
-  const y = ts.slice(0,4), mo = ts.slice(4,6), d = ts.slice(6,8)
-  const h = ts.slice(8,10), mi = ts.slice(10,12), s = ts.slice(12,14)
-  return new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`)
+  return new Date(ts)
 }
 
-function openModal(image: ImageInfo) { selectedImage.value = image }
+function openModal(image: ImageInfo) {
+  console.log(image)
+  selectedImage.value = image }
 
 function onImageDeleted(image: ImageInfo) {
   const remaining = filteredPredictions.value

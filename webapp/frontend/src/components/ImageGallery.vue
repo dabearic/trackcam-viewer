@@ -3,8 +3,8 @@
     <template v-for="event in events" :key="event.timestamp">
       <!-- Date/time header spanning all columns -->
       <div class="gallery__header">
-        <button class="gallery__date" @click="$emit('day-select', dayData(event))">{{ formatDate(event.timestamp) }}</button>
-        <span class="gallery__time">{{ formatTime(event.timestamp.toDateString()) }}</span>
+        <button class="gallery__date" @click="$emit('day-select', dayData(event))">{{ event.date.toDateString() }}</button>
+        <span class="gallery__time">{{ formatTime(event.date) }}</span>
         <span class="gallery__count">{{ event.images.length }} image{{ event.images.length !== 1 ? 's' : '' }}</span>
       </div>
 
@@ -25,10 +25,10 @@
           />
           <div class="gallery__badge-row">
             <span
-              v-for="det in img.badges().entries()"
-              :key="`${det[1]}|${det[0]}`"
-              :class="`badge badge--${det[0]}`"
-            >{{ det[0] }}: {{ det[1] }}</span>
+              v-for="[label, count] in img.badges().entries()"
+              :key="`${label}`"
+              :class="`badge badge--${Category.contains(label) ? label : Category.ANIMAL}`"
+            >{{ label }}:{{count}} </span>
           </div>
         </button>
         <button
@@ -48,18 +48,19 @@
 
 <script setup lang="ts">
 import { imageUrl } from '../firebase.js'
-import {ImageInfo} from '../model/model.ts'
+import {Category, ImageInfo} from '../model/model.ts'
 const props = defineProps({ events: Array<DayGroup> })
 defineEmits(['select', 'day-select', 'delete'])
 class DayGroup {
-  timestamp: Date
+  timestamp: string
+  date: Date
   images: ImageInfo[]
 }
 function dayData(event: DayGroup) {
-  const dayPrefix = event.timestamp.toDateString()
-  const dayEvents = props.events.filter(e => e.timestamp.toDateString() === dayPrefix)
+  const dayPrefix = event.date.toDateString()
+  const dayEvents = props.events.filter(e => e.date.toDateString() === dayPrefix)
   return {
-    date: event.timestamp,
+    date: event.date,
     events: dayEvents,
     images: dayEvents.flatMap(e => e.images),
   }
@@ -68,12 +69,7 @@ function dayData(event: DayGroup) {
 const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
-function formatDate(d: Date): string {
-  if (!d) return ''
-  return `${DAY_NAMES[d.getDay()]} ${d.getDate()} ${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`
-}
-
-function formatTime(d) {
+function formatTime(d: Date): string {
   if (!d) return ''
   return d.toTimeString().slice(0, 8)
 }

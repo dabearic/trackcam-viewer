@@ -1,69 +1,129 @@
 {
-  "filepath": "C:/Users/dabea/Downloads/Photos-4-001/20260409205154_IM_00066.JPG",
-  "classifications": {
-    "classes": [
-      "aaf3b049-36e6-46dd-9a07-8a580e9618b7;mammalia;carnivora;canidae;canis;latrans;coyote",
-      "5c7ce479-8a45-40b3-ae21-7c97dfae22f5;mammalia;artiodactyla;cervidae;odocoileus;virginianus;white-tailed deer",
-      "ffe603fc-4920-4302-96d0-65f708bd5b2d;mammalia;carnivora;canidae;urocyon;cinereoargenteus;grey fox",
-      "15abc3f7-7155-450e-a590-1730ee9a1adb;mammalia;carnivora;canidae;canis;aureus;golden jackal",
-      "ba76d46e-25de-45e2-90a8-bd279b650f7c;mammalia;carnivora;felidae;lynx;rufus;bobcat"
-    ],
-    "scores": [
-      0.988,
-      0.0014,
-      0.0012,
-      0.0011,
-      0.0006
-    ]
-  },
-  "detections": [
-    {
-      "category": "1",
-      "label": "animal",
-      "conf": 0.8762,
-      "bbox": [
-        0.5747,
-        0.5727,
-        0.0594,
-        0.0644
-      ]
-    },
-    {
-      "category": "1",
-      "label": "animal",
-      "conf": 0.0281,
-      "bbox": [
-        0.0,
-        0.8194,
-        0.0172,
-        0.1505
-      ]
-    },
-    {
-      "category": "1",
-      "label": "animal",
-      "conf": 0.0231,
-      "bbox": [
-        0.0,
-        0.5843,
-        0.0193,
-        0.3861
-      ]
-    },
-    {
-      "category": "1",
-      "label": "animal",
-      "conf": 0.014,
-      "bbox": [
-        0.8094,
-        0.2278,
-        0.0104,
-        0.0204
-      ]
-    }
-  ],
-  "prediction": "aaf3b049-36e6-46dd-9a07-8a580e9618b7;mammalia;carnivora;canidae;canis;latrans;coyote",
-  "prediction_score": 0.988,
-  "prediction_source": "classifier",
-  "model_version": "4.0.2a"
-}
+            "filepath": "C:/Users/dabea/Downloads/Photos-3-001/20260330190432_IM_00077.JPG",
+            "filename": "20260330190432_IM_00077.JPG",
+            "taken_at": "2026-03-30T19:04:31",
+            "prediction": {
+                "id": "990ae9dd-7a59-4344-afcb-1b7b21368000",
+                "common_name": "human",
+                "scientific": "Homo sapiens",
+                "raw": "990ae9dd-7a59-4344-afcb-1b7b21368000;mammalia;primates;hominidae;homo;sapiens;human"
+            },
+            "prediction_score": 0.8883,
+            "prediction_source": "classifier",
+            "top5": [
+                {
+                    "id": "990ae9dd-7a59-4344-afcb-1b7b21368000",
+                    "common_name": "human",
+                    "scientific": "Homo sapiens",
+                    "raw": "990ae9dd-7a59-4344-afcb-1b7b21368000;mammalia;primates;hominidae;homo;sapiens;human",
+                    "score": 0.8883
+                },
+                {
+                    "id": "3d80f1d6-b1df-4966-9ff4-94053c7a902a",
+                    "common_name": "domestic dog",
+                    "scientific": "Canis familiaris",
+                    "raw": "3d80f1d6-b1df-4966-9ff4-94053c7a902a;mammalia;carnivora;canidae;canis;familiaris;domestic dog",
+                    "score": 0.0824
+                },
+                {
+                    "id": "b1352069-a39c-4a84-a949-60044271c0c1",
+                    "common_name": "bird",
+                    "scientific": "Aves",
+                    "raw": "b1352069-a39c-4a84-a949-60044271c0c1;aves;;;;;bird",
+                    "score": 0.0035
+                },
+                {
+                    "id": "94d8284e-6193-43b5-b80c-9029cf951675",
+                    "common_name": "wild turkey",
+                    "scientific": "Meleagris gallopavo",
+                    "raw": "94d8284e-6193-43b5-b80c-9029cf951675;aves;galliformes;phasianidae;meleagris;gallopavo;wild turkey",
+                    "score": 0.0026
+                },
+                {
+                    "id": "aca65aaa-8c6d-4b69-94de-842b08b13bd6",
+                    "common_name": "domestic cattle",
+                    "scientific": "Bos taurus",
+                    "raw": "aca65aaa-8c6d-4b69-94de-842b08b13bd6;mammalia;artiodactyla;bovidae;bos;taurus;domestic cattle",
+                    "score": 0.0021
+                }
+            ],
+            "detections": [
+                {
+                    "category": "3",
+                    "label": "vehicle",
+                    "conf": 0.8775,
+                    "bbox": [
+                        0.6931,
+                        0.4525,
+                        0.0654,
+                        0.0704
+                    ],
+                    "id": "74e7af05c0f04603a4984a28afccf322"
+                },
+                {
+                    "category": "2",
+                    "label": "human",
+                    "conf": 0.8358,
+                    "bbox": [
+                        0.2643,
+                        0.4013,
+                        0.038,
+                        0.1081
+                    ],
+                    "id": "633a09c337084361b236e2a4612dfd3f"
+                },
+                {
+                    "category": "3",
+                    "label": "vehicle",
+                    "conf": 0.8348,
+                    "bbox": [
+                        0.2527,
+                        0.4462,
+                        0.0643,
+                        0.074
+                    ],
+                    "id": "1901cb55349f46aeb97a83ac3680bc33"
+                },
+                {
+                    "category": "2",
+                    "label": "human",
+                    "conf": 0.7132,
+                    "bbox": [
+                        0.7112,
+                        0.4131,
+                        0.0298,
+                        0.0987
+                    ],
+                    "id": "98302aa4f4de482da4b66564e75cd79c"
+                },
+                {
+                    "category": "2",
+                    "label": "human",
+                    "conf": 0.0224,
+                    "bbox": [
+                        0.6956,
+                        0.4075,
+                        0.0613,
+                        0.114
+                    ],
+                    "id": "99f9322b160d4c8ab0c2c9c5c68c7d46"
+                },
+                {
+                    "category": "3",
+                    "label": "vehicle",
+                    "conf": 0.0125,
+                    "bbox": [
+                        0.0492,
+                        0.285,
+                        0.0156,
+                        0.0156
+                    ],
+                    "id": "6666078cebc74deeb5177a5a5bab1290"
+                }
+            ],
+            "model_version": "4.0.2a",
+            "failures": [],
+            "country": null,
+            "latitude": null,
+            "longitude": null
+        }
