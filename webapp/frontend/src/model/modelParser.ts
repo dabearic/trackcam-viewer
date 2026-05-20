@@ -4,11 +4,16 @@ import {Category, Detection, FloatRegion, ImageInfo, Kind, Prediction, Source, T
 export function parseJsonImage(obj: any): ImageInfo {
     let image = new ImageInfo()
     image.filename = obj.filename
-    image.taken_at = obj.taken_at
+    image.filepath = obj.filepath
+    image.taken_at = new Date(obj.taken_at)
     image.failures = obj.failures
     image.timestamp = obj.timestamp
     image.prediction = parsePrediction(obj)
     image.detections = parseDetections(obj.detections, image)
+    if(obj.folder){
+        image.folder = obj.folder
+        console.log(obj.folder)
+    }
     return image
 }
 
@@ -16,14 +21,14 @@ function parsePrediction(prediction: any): Prediction {
     let result: Prediction = new Prediction()
     result.score = prediction.prediction_score
     result.model_version = prediction.model_version
-    result.classification = parseKind(prediction.prediction)
-    result.category = prediction.category
+    result.classification = parseKind(prediction.prediction.raw)
+    result.category =Kind.getCategory(result.classification)
     result.country = prediction.country
     result.source = prediction.source as Source
-    let taxa: Kind[] = prediction.classifications.classes.map(parseKind)
+    let taxa: Kind[] = prediction.top5.map(top=>parseKind(top.raw))
     result.top5 = new Map<Kind, number>()
     for(const [index, kind] of taxa.entries()) {
-        result.top5.set(kind, prediction.classifications.scores[index])
+        result.top5.set(kind, prediction.top5[index].score)
     }
 
     return result
@@ -35,20 +40,18 @@ function parseDetections(detections: any[], image: ImageInfo): Detection[] {
 
 function parseDetection(detection: any, image: ImageInfo): Detection{
     let result: Detection = new Detection()
-    result.category = Category[detection.category]
+    result.category = detection.label as Category
     result.confidence = detection.conf
     if(image.prediction.species() && result.category == Category.ANIMAL )
         result.classification = image.prediction.species()
+    if(detection.crop_gcs_path)
+        result.crop_gcs_path = detection.crop_gcs_path
     // @ts-ignore this will always be 4 floats per SpeciesNet
     result.bbox = new FloatRegion(... detection.bbox)
     result.parent = image
     result.manual = false
     return result
-}
 
-function parseBBox(box: [number, number, number, number]): FloatRegion{
-    let result
-    return result
 }
 
 export function parseKind(kind: string): Kind {

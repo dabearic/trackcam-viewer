@@ -88,9 +88,9 @@
           <div class="species-card__crops">
             <button
               v-for="top in card.top"
-              :key="imagePathOf(top.pred)"
+              :key="imagePathOf(top.detection.parent)"
               class="species-card__crop"
-              @click="$emit('select', top.pred)"
+              @click="$emit('select', top.detection.parent)"
               @mouseenter="showPreview(top, $event)"
               @mousemove="movePreview($event)"
               @mouseleave="hidePreview"
@@ -108,7 +108,7 @@
               />
               <div v-else class="species-card__crop-placeholder">no crop</div>
               <div class="species-card__crop-meta">
-                <span>{{ Math.round((top.pred.prediction_score ?? 0) * 100) }}%</span>
+                <span>{{ Math.round((top.detection.parent.prediction.score ?? 0) * 100) }}%</span>
                 <span v-if="top.when">{{ top.when }}</span>
               </div>
             </button>
@@ -142,7 +142,7 @@ const barHover = ref(null)
 
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
-function showPreview(top, e) {
+function showPreview(top: { cropPath: any }, e: any) {
   preview.src = top.cropPath ? imageUrl(top.cropPath) : null
   if (preview.src) movePreview(e)
 }
@@ -157,7 +157,7 @@ function hidePreview() {
 }
 import TreeNode from './TreeNode.vue'
 import { imageUrl } from '../firebase.js'
-import {Detection, ImageInfo, Prediction} from "../model/model.ts";
+import {Category, Detection, FloatRegion, ImageInfo, Kind, Prediction, Taxon} from "../model/model.ts";
 
 const props = defineProps({ predictions: Array<ImageInfo> })
 const emit = defineEmits(['select', 'filter'])
@@ -168,14 +168,14 @@ const selectedPath = ref(null)
 
 // ── Build the taxonomy tree from prediction.raw (semicolon-separated) ─────────
 // SpeciesNet label format: "{uuid};{kingdom};{phylum};{class};{order};{family};{genus};{species};{common_name}"
-function taxonomyChain(pred) {
-  const raw = pred.prediction?.raw
-  if (!raw) return null
-  const parts = raw.split(';').map(p => p.trim())
+function taxonomyChain(pred: ImageInfo) {
+
   // Drop the uuid at index 0 and the common_name at the end (we'll attach it separately).
-  const levels = parts.slice(1, -1).filter(Boolean)
-  const commonName = parts[parts.length - 1] || pred.prediction?.common_name || 'unknown'
-  return { levels, commonName, scientific: pred.prediction?.scientific || '' }
+  const spec: Taxon = pred.prediction.species()
+
+  const levels = spec ? [spec.class, spec.order, spec.family, spec.genus, spec.species].filter(Boolean) : []
+  const commonName = pred.prediction.label()
+  return { levels, commonName, scientific: pred.prediction.species()?.scientific || '' }
 }
 
 const tree = computed(() => {
@@ -251,36 +251,33 @@ const speciesCards = computed(() => {
   // this yields exactly one card.
   const groups = new Map<string, Array<ImageInfo>>()
   for (const pred of node.preds) {
-    const name = pred.prediction?.common_name || 'unknown'
+    const name = pred.prediction.isSpecies() ? pred.prediction.species()?.id: Category.UNKNOWN
     if (EXCLUDED_LABELS.has(name.toLowerCase())) continue
     if (!groups.has(name)) groups.set(name, [])
     groups.get(name).push(pred)
   }
 
-  const cards = []
+  const cards: SpeciesCard[] = []
   let entries = groups.entries();
-  for (const [commonName, preds] of entries) {
-    const ranked = preds.map(pred => {
-      const det = bestDetection(pred)
-      const [, , bw = 0, bh = 0] = det?.bbox || []
-      const area  = bw * bh
-      const score = pred.prediction.score ?? 0
-      return { pred, det, rank: area * score }
+  for (const [id, images] of entries) {
+    const ranked: Detection[] = images.flatMap(pred => pred.detections)
+      ranked.sort((a, b) => {
+      let rankA = a.confidence * a.bbox.areaPercent()
+      let rankB = b.confidence * b.bbox.areaPercent()
+      if (rankA != rankB)
+        return rankB - rankA
+      return timestampOf(b.parent.taken_at).localeCompare(timestampOf(a.parent.taken_at))
     })
-    ranked.sort((a, b) => {
-      if (b.rank !== a.rank) return b.rank - a.rank
-      return timestampOf(b.pred).localeCompare(timestampOf(a.pred))
-    })
-    const top = ranked.slice(0, 5).map(({ pred, det }) => ({
-      pred,
+    const top: Top[] = ranked.slice(0, 5).map((det: Detection) => ({
+      detection: det,
       cropPath: det?.crop_gcs_path || null,
       bbox: det?.bbox || null,
-      when: formatTimestamp(timestampOf(pred)),
-    }))
+      when: formatTimestamp(timestampOf(det.parent)),
+    } as Top))
     const hours  = new Array(24).fill(0)
     const months = new Array(12).fill(0)
-    for (const pred of preds) {
-      const ts = timestampOf(pred)
+    for (const image of images) {
+      const ts = timestampOf(image)
       if (ts.length >= 10) {
         const h = parseInt(ts.slice(8, 10), 10)
         if (h >= 0 && h < 24) hours[h]++
@@ -291,11 +288,11 @@ const speciesCards = computed(() => {
       }
     }
     cards.push({
-      key: commonName,
-      rawName: commonName,
-      commonName: capitalize(commonName),
-      scientific: preds[0].prediction?.classification['scientific'] || '',
-      count: preds.length,
+      key: id,
+      rawName: images[0].prediction.classification,
+      commonName: capitalize(images[0].prediction.label()),
+      scientific: images[0].prediction.species()?.scientific || images[0].prediction.category,
+      count: images.length,
       top,
       hours,
       months,
@@ -305,6 +302,25 @@ const speciesCards = computed(() => {
   cards.sort((a, b) => b.count - a.count)
   return cards
 })
+
+class Top {
+  detection: Detection
+  bbox: FloatRegion
+  cropPath: string
+  when: string
+}
+
+
+class SpeciesCard {
+  key: string
+  rawName: Kind
+  commonName: string
+  scientific: string
+  count: number
+  top: Top[]
+  hours: number[]
+  months: number[]
+}
 
 function timestampOf(pred) {
   if (pred.captured_at) return pred.captured_at
@@ -325,7 +341,7 @@ function bestDetection(pred) {
   return best
 }
 
-function bboxStyle(top: Detection) {
+function bboxStyle(top: Top) {
   const bx = top.bbox.minX
   const by = top.bbox.minY
   const bw = top.bbox.width
@@ -336,7 +352,7 @@ function bboxStyle(top: Detection) {
   const posX  = (bx / (1 - bw) * 100).toFixed(2)
   const posY  = (by / (1 - bh) * 100).toFixed(2)
   return {
-    backgroundImage: `url("${imageUrl(imagePathOf(top.parent))}")`,
+    backgroundImage: `url("${imageUrl(imagePathOf(top.detection.parent))}")`,
     backgroundSize: `${sizeX}% ${sizeY}%`,
     backgroundPosition: `${isFinite(Number(posX)) ? posX : 0}% ${isFinite(Number(posY)) ? posY : 0}%`,
   }

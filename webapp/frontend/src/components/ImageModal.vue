@@ -208,13 +208,15 @@
                 <dt>Model</dt>
                 <dd>{{ image.prediction.model_version }}</dd>
               </template>
-              <template v-if="image.cameraPosition.country">
-                <dt>Country</dt>
-                <dd>{{ image.cameraPosition.country }}</dd>
-              </template>
-              <template v-if="image.cameraPosition.latitude != null">
-                <dt>Location</dt>
-                <dd>{{ image.cameraPosition.latitude.toFixed(4) }}, {{ image.cameraPosition.longitude.toFixed(4) }}</dd>
+              <template v-if="image.cameraPosition">
+                <template v-if="image.cameraPosition.country">
+                  <dt>Country</dt>
+                  <dd>{{ image.cameraPosition.country }}</dd>
+                </template>
+                <template v-if="image.cameraPosition.latitude != null">
+                  <dt>Location</dt>
+                  <dd>{{ image.cameraPosition.latitude.toFixed(4) }}, {{ image.cameraPosition.longitude.toFixed(4) }}</dd>
+                </template>
               </template>
             </dl>
           </section>
@@ -298,7 +300,7 @@ import { imageUrl, apiFetch } from '../firebase.js'
 import { useSpeciesCatalog } from '../composables/useSpeciesCatalog.js'
 import FiltersBox from "./FiltersBox.vue";
 import ShowHideSection from "./ShowHideSection.vue";
-import {Detection, ImageInfo, Kind} from "../model/model.ts";
+import {Category, Detection, ImageInfo, Kind} from "../model/model.ts";
 
 const props = defineProps({
   image: ImageInfo,
@@ -452,14 +454,14 @@ function capitalize(s) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
 }
 
-const CATEGORY_COLORS = { '1': '#4ade80', '2': '#fb923c', '3': '#60a5fa' }
-function categoryColor(cat) {
+const CATEGORY_COLORS = { 'animal': '#4ade80', 'human': '#fb923c', 'vehicle': '#60a5fa' }
+function categoryColor(cat: Category) {
   return CATEGORY_COLORS[cat] ?? '#a78bfa'
 }
 
 const NON_SPECIES = new Set(['blank', 'human', 'vehicle'])
 
-function detectionLabel(det) {
+function detectionLabel(det: Detection): string {
   // Manual edits store the species directly on the detection — prefer that
   // over the image-level prediction fallback below. Without this, the bbox
   // label silently ignored every manual edit because it kept rendering the
@@ -468,13 +470,13 @@ function detectionLabel(det) {
   // Inference detections only carry a generic class label ("animal"), so
   // for animal-category detections we surface the image's species
   // prediction instead. Skipped for blank/human/vehicle predictions.
-  if (det.category === '1') {
+  if (det.category === Category.ANIMAL) {
     const name = props.image.prediction?.label()
     if (name && !NON_SPECIES.has(name.toLowerCase())) {
       return capitalize(name)
     }
   }
-  return capitalize(det.label)
+  return capitalize(det.label())
 }
 
 // ── Edit-mode helpers ────────────────────────────────────────────────────────
@@ -706,11 +708,11 @@ function onDrawUp(e: MouseEvent) {
  * exactly while its border and label render at native pixel size — no
  * counter-scaling, no bitmap-scale blur on composite layers.
  */
-function bboxScreenStyle(det) {
+function bboxScreenStyle(det: Detection): any {
   const wrap = wrapRef.value
   const { w: bw, h: bh } = baseSize.value
   if (!wrap || !bw || !bh) return null
-  const [x, y, w, h] = det.bbox
+  const x= det.bbox.minX, y = det.bbox.minY, h = det.bbox.height, w = det.bbox.width
   const baseX = (wrap.clientWidth  - bw) / 2
   const baseY = (wrap.clientHeight - bh) / 2
   const z     = zoom.value
@@ -759,11 +761,11 @@ function resetZoom() {
  * Auto-zoom the viewport so that `det.bbox` fills ~CROP_FILL_FRACTION of
  * whichever view dimension the bbox is longer in, then centre the bbox.
  */
-function zoomToDetection(det) {
+function zoomToDetection(det: Detection) {
   const wrap = wrapRef.value
   const { w: baseW, h: baseH } = baseSize.value
   if (!wrap || !baseW || !baseH || !det?.bbox) return
-  const [bx, by, bw, bh] = det.bbox
+  const bx=det.bbox.minX, by=det.bbox.minY, bw=det.bbox.width, bh = det.bbox.height
   const bboxPxW = bw * baseW
   const bboxPxH = bh * baseH
   if (bboxPxW <= 0 || bboxPxH <= 0) return
