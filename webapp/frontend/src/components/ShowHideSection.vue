@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import {ref, defineProps} from "vue";
 
 const props = defineProps(['name','showByDefault', "onName", "offName"])

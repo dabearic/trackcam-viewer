@@ -17,12 +17,12 @@
     />
     <canvas v-else ref="canvasRef" class="crop__canvas" />
     <span class="crop__badge" :style="{ background: color }">
-      {{ label }} {{ (det.conf * 100).toFixed(0) }}%
+      {{ label }} {{ (det.confidence * 100).toFixed(0) }}%
     </span>
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { imageUrl } from '../firebase.js'
 
@@ -45,11 +45,10 @@ function draw() {
 
   const img = new Image()
   img.onload = () => {
-    const [bx, by, bw, bh] = props.det.bbox
-    const sx = bx * img.naturalWidth
-    const sy = by * img.naturalHeight
-    const sw = bw * img.naturalWidth
-    const sh = bh * img.naturalHeight
+    const sx = props.det.bbox.minX * img.naturalWidth
+    const sy = props.det.bbox.minY * img.naturalHeight
+    const sw = props.det.bbox.width * img.naturalWidth
+    const sh = props.det.bbox.height * img.naturalHeight
 
     const targetW = Math.max(60, Math.round(TARGET_H * (sw / sh)))
     canvas.width  = targetW

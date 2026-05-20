@@ -7,15 +7,15 @@
     </div>
     <div class="event__images">
       <button
-        v-for="img in event.images"
-        :key="img.filename"
-        class="event__thumb"
-        @click="$emit('select', img)"
+          v-for="img in event.images"
+          :key="img.filename"
+          class="event__thumb"
+          @click="$emit('select', img)"
       >
         <img
-          :src="imageUrl(img.filepath)"
-          :alt="img.filename"
-          loading="lazy"
+            :src="imageUrl(img.filepath)"
+            :alt="img.filename"
+            loading="lazy"
         />
         <div class="event__badge-row">
           <span v-if="img.prediction" :class="`badge badge--${getCategory(img)}`">
@@ -30,20 +30,22 @@
   </div>
 </template>
 
-<script setup>
-import { imageUrl } from '../firebase.js'
+<script setup lang="ts">
+import {imageUrl} from '../firebase.js'
+import {Category, ImageInfo} from "../model/model.ts";
+
 defineProps({ event: Object })
 defineEmits(['select'])
 
 const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
-function formatDate(d) {
+function formatDate(d: Date): string {
   if (!d) return ''
   return `${DAY_NAMES[d.getDay()]} ${d.getDate()} ${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`
 }
 
-function formatTime(d) {
+function formatTime(d: Date): string {
   if (!d) return ''
   return d.toTimeString().slice(0, 8)
 }
@@ -52,13 +54,8 @@ function capitalize(s) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
 }
 
-function getCategory(img) {
-  const name = img.prediction?.common_name?.toLowerCase()
-  if (!name) return 'unknown'
-  if (name === 'blank') return 'blank'
-  if (name === 'human') return 'human'
-  if (name === 'vehicle') return 'vehicle'
-  return 'animal'
+function getCategory(img: ImageInfo): Category {
+  return img.prediction.category || Category.BLANK
 }
 </script>
 

@@ -62,7 +62,7 @@
           class="modal__editor-dock"
           :mode="editorMode"
           :detection="editingDet"
-          :top-five="topFiveFor(image)"
+          :top-five="image.prediction.top5"
           :flat-species="flatSpecies"
           :add-custom="addCustom"
           :similar-count="similarCount"
@@ -92,7 +92,7 @@
               v-show="imageLoaded"
               :src="imageUrl(image.filepath)"
               :alt="image.filename"
-              :style="filterStyleText.value"
+              :style="filterStyleText"
               class="modal__img"
               draggable="false"
               @load="onImageLoad"
@@ -118,7 +118,7 @@
                 'modal__bbox--editing':  editingDet && det.id === editingDet.id,
               }"
               :style="bboxScreenStyle(det)"
-              :title="`${detectionLabel(det)} ${(det.conf * 100).toFixed(0)}%${det.manual ? ' (manual)' : ''}`"
+              :title="`${detectionLabel(det)} ${(det.confidence * 100).toFixed(0)}%${det.manual ? ' (manual)' : ''}`"
               @click.stop="openEditorForDet(det)"
             >
               <span
@@ -126,7 +126,7 @@
                 :style="{ background: categoryColor(det.category) }"
               >
                 <span v-if="det.manual" class="modal__bbox-manual" title="Manual edit">✎</span>
-                {{ detectionLabel(det) }} {{ (det.conf * 100).toFixed(0) }}%
+                {{ detectionLabel(det) }} {{ (det.confidence * 100).toFixed(0) }}%
               </span>
             </div>
           </div>
@@ -189,46 +189,48 @@
             <h3 class="panel__heading">Prediction</h3>
             <div v-if="image.prediction" class="panel__prediction">
               <span :class="`badge badge--${getCategory(image)}`">
-                {{ capitalize(image.prediction.common_name) }}
+                {{ capitalize(image.prediction.label()) }}
               </span>
-              <span v-if="image.prediction.scientific" class="panel__scientific">
-                {{ image.prediction.scientific }}
+              <span v-if="image.prediction.species()?.scientific" class="panel__scientific">
+                {{ image.prediction.species()?.scientific }}
               </span>
             </div>
             <dl class="panel__meta">
-              <template v-if="image.prediction_score != null">
+              <template v-if="image.prediction.score != null">
                 <dt>Score</dt>
-                <dd>{{ (image.prediction_score * 100).toFixed(1) }}%</dd>
+                <dd>{{ (image.prediction.score * 100).toFixed(1) }}%</dd>
               </template>
-              <template v-if="image.prediction_source">
+              <template v-if="image.prediction.source">
                 <dt>Source</dt>
-                <dd>{{ image.prediction_source }}</dd>
+                <dd>{{ image.prediction.source }}</dd>
               </template>
-              <template v-if="image.model_version">
+              <template v-if="image.prediction.model_version">
                 <dt>Model</dt>
-                <dd>{{ image.model_version }}</dd>
+                <dd>{{ image.prediction.model_version }}</dd>
               </template>
-              <template v-if="image.country">
-                <dt>Country</dt>
-                <dd>{{ image.country }}</dd>
-              </template>
-              <template v-if="image.latitude != null">
-                <dt>Location</dt>
-                <dd>{{ image.latitude.toFixed(4) }}, {{ image.longitude.toFixed(4) }}</dd>
+              <template v-if="image.cameraPosition">
+                <template v-if="image.cameraPosition.country">
+                  <dt>Country</dt>
+                  <dd>{{ image.cameraPosition.country }}</dd>
+                </template>
+                <template v-if="image.cameraPosition.latitude != null">
+                  <dt>Location</dt>
+                  <dd>{{ image.cameraPosition.latitude.toFixed(4) }}, {{ image.cameraPosition.longitude.toFixed(4) }}</dd>
+                </template>
               </template>
             </dl>
           </section>
 
           <!-- Top-5 classifications -->
-          <section v-if="image.top5?.length" class="panel__section">
+          <section v-if="image.prediction.top5?.size" class="panel__section">
             <h3 class="panel__heading">Top-5 Classifications</h3>
             <div class="panel__top5">
-              <div v-for="(cls, i) in image.top5" :key="i" class="panel__cls">
-                <span class="panel__cls-name">{{ capitalize(cls.common_name) }}</span>
+              <div v-for="(cls, i) in image.prediction.top5.entries()" :key="i" class="panel__cls">
+                <span class="panel__cls-name">{{ capitalize(Kind.label(cls[0])) }}</span>
                 <div class="panel__cls-bar-wrap">
-                  <div class="panel__cls-bar" :style="{ width: `${cls.score * 100}%` }"></div>
+                  <div class="panel__cls-bar" :style="{ width: `${cls[1] * 100}%` }"></div>
                 </div>
-                <span class="panel__cls-score">{{ (cls.score * 100).toFixed(1) }}%</span>
+                <span class="panel__cls-score">{{ (cls[1] * 100).toFixed(1) }}%</span>
               </div>
             </div>
           </section>
@@ -246,19 +248,19 @@
                   'panel__det--editable': editMode,
                   'panel__det--editing':  editingDet && det.id === editingDet.id,
                 }"
-                @click="editMode && openEditorForDet(det)"
+                @click="editMode ? openEditorForDet(det) : zoomToDetection(det)"
               >
                 <span class="panel__det-dot" :style="{ background: categoryColor(det.category) }"></span>
                 <span>{{ detectionLabel(det) }}</span>
                 <span v-if="det.manual" class="panel__det-manual" title="Manual edit">✎</span>
-                <span class="panel__det-conf">{{ (det.conf * 100).toFixed(0) }}%</span>
+                <span class="panel__det-conf">{{ (det.confidence * 100).toFixed(0) }}%</span>
               </component>
             </div>
           </section>
 
            <section class="panel__section">
             <ShowHideSection name="Image Adjustment" class="panel__heading" show-by-default="false" onName="+" off-name="-">
-              <FiltersBox :filterTypes="filterTypes" @styles-update="filterStyleText.value=$event"/>
+              <FiltersBox :filterTypes="filterTypes" @styles-update="filterStyleText=$event"/>
             </ShowHideSection>
           </section>
 
@@ -288,22 +290,24 @@
   </div>
 </template>
 
-<script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+<script setup lang="ts">
+import {ref, computed, watch, onMounted, onUnmounted, Ref, ComputedRef} from 'vue'
 import exifr from 'exifr'
+import Options from 'exifr'
 import DetectionCrop from './DetectionCrop.vue'
 import DetectionEditor from './DetectionEditor.vue'
 import { imageUrl, apiFetch } from '../firebase.js'
 import { useSpeciesCatalog } from '../composables/useSpeciesCatalog.js'
 import FiltersBox from "./FiltersBox.vue";
 import ShowHideSection from "./ShowHideSection.vue";
+import {Category, Detection, ImageInfo, Kind} from "../model/model.ts";
 
 const props = defineProps({
-  image: Object,
-  allImages: Array,
+  image: ImageInfo,
+  allImages: Array<ImageInfo>,
   // Full predictions list (not just filtered) so the species tree sees every
   // species ever observed, regardless of current gallery filters.
-  predictions: { type: Array, default: () => [] },
+  predictions: { type: Array<ImageInfo>, default: () => [] },
 })
 const emit = defineEmits(['close', 'navigate', 'deleted', 'detections-changed'])
 
@@ -321,12 +325,12 @@ const editorError     = ref('')
 const editorBusy      = ref(false)
 const drawStart       = ref(null)              // { nx, ny } image-normalised
 const drawEnd         = ref(null)
-const predictionsRef  = computed(() => props.predictions)
-const speciesCatalog  = useSpeciesCatalog(predictionsRef)
+const predictionsRef: Ref<Array<ImageInfo>> = ref(props.predictions)
+const speciesCatalog  = useSpeciesCatalog(predictionsRef.value)
 const { topFive: topFiveFor, flatSpecies, addCustom, loadCustom } = speciesCatalog
 
 const filterTypes = ref(['contrast', 'brightness', 'saturate'])
-const filterStyleText = ref({filter: 'contrast(1.8)'})
+const filterStyleText = ref({filter: ''})
 const showFilters = ref(false)
 
 function cancelDelete() {
@@ -389,9 +393,9 @@ const currentIndex = computed(() => props.allImages.indexOf(props.image))
 // panel rows. In view mode we hide noise below 10% confidence; in edit
 // mode we surface every detection so "Apply to all 13" doesn't disagree
 // with what the user can actually see and click on.
-const significantDetections = computed(() => {
+const significantDetections: ComputedRef<Array<Detection>> = computed(() => {
   const all = props.image.detections ?? []
-  return editMode.value ? all : all.filter(d => d.conf >= 0.1)
+  return editMode.value ? all : all.filter(d => d.confidence >= 0.1)
 })
 
 // How many detections share the open editor's category — used for the
@@ -415,7 +419,7 @@ const exifEntries = computed(() => {
     .sort(([a], [b]) => a.localeCompare(b))
 })
 
-function formatExifValue(v) {
+function formatExifValue(v: unknown) {
   if (v instanceof Date) return v.toISOString().replace('T', ' ').slice(0, 19)
   if (Array.isArray(v))  return v.map(formatExifValue).join(', ')
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(4)
@@ -428,7 +432,7 @@ async function loadExif() {
   exifLoading.value = true
   try {
     const url = imageUrl(props.image.filepath)
-    const tags = await exifr.parse(url, { tiff: true, exif: true, gps: true, ifd0: true })
+    const tags = await exifr.parse(url,  true )
     exifTags.value = tags || {}
   } catch (e) {
     exifTags.value = {}
@@ -437,8 +441,8 @@ async function loadExif() {
   }
 }
 
-function getCategory(img) {
-  const name = img.prediction?.common_name?.toLowerCase()
+function getCategory(img: ImageInfo) {
+  const name = img.prediction?.label().toLowerCase()
   if (!name) return 'unknown'
   if (name === 'blank') return 'blank'
   if (name === 'human') return 'human'
@@ -450,14 +454,14 @@ function capitalize(s) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
 }
 
-const CATEGORY_COLORS = { '1': '#4ade80', '2': '#fb923c', '3': '#60a5fa' }
-function categoryColor(cat) {
+const CATEGORY_COLORS = { 'animal': '#4ade80', 'human': '#fb923c', 'vehicle': '#60a5fa' }
+function categoryColor(cat: Category) {
   return CATEGORY_COLORS[cat] ?? '#a78bfa'
 }
 
 const NON_SPECIES = new Set(['blank', 'human', 'vehicle'])
 
-function detectionLabel(det) {
+function detectionLabel(det: Detection): string {
   // Manual edits store the species directly on the detection — prefer that
   // over the image-level prediction fallback below. Without this, the bbox
   // label silently ignored every manual edit because it kept rendering the
@@ -466,13 +470,13 @@ function detectionLabel(det) {
   // Inference detections only carry a generic class label ("animal"), so
   // for animal-category detections we surface the image's species
   // prediction instead. Skipped for blank/human/vehicle predictions.
-  if (det.category === '1') {
-    const name = props.image.prediction?.common_name
+  if (det.category === Category.ANIMAL) {
+    const name = props.image.prediction?.label()
     if (name && !NON_SPECIES.has(name.toLowerCase())) {
       return capitalize(name)
     }
   }
-  return capitalize(det.label)
+  return capitalize(det.label())
 }
 
 // ── Edit-mode helpers ────────────────────────────────────────────────────────
@@ -538,7 +542,7 @@ function closeEditor() {
   editorBusy.value = false
 }
 
-async function onEditorSave(payload) {
+async function onEditorSave(payload: { category: any; label: any; scientific: any; conf: any; applyToAll: any }) {
   if (!editingDet.value) return
   editorBusy.value = true
   editorError.value = ''
@@ -583,7 +587,7 @@ async function onEditorSave(payload) {
       )
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-      const byId = new Map(data.detections.map(d => [d.id, d]))
+      const byId = new Map<string,Detection>(data.detections.map(d => [d.id, d]))
       props.image.detections = (props.image.detections ?? []).map(
         d => byId.get(d.id) || d,
       )
@@ -657,7 +661,7 @@ function cancelDraw() {
   drawEnd.value = null
 }
 
-function onDrawDown(e) {
+function onDrawDown(e: MouseEvent) {
   if (!drawMode.value || e.button !== 0) return
   const p = mouseToNormalised(e)
   if (!p) return
@@ -669,13 +673,13 @@ function onDrawDown(e) {
   window.addEventListener('mouseup',   onDrawUp)
 }
 
-function onDrawMove(e) {
+function onDrawMove(e: MouseEvent) {
   if (!drawStart.value) return
   const p = mouseToNormalised(e)
   if (p) drawEnd.value = p
 }
 
-function onDrawUp(e) {
+function onDrawUp(e: MouseEvent) {
   window.removeEventListener('mousemove', onDrawMove)
   window.removeEventListener('mouseup',   onDrawUp)
   if (!drawStart.value || !drawEnd.value) {
@@ -704,11 +708,11 @@ function onDrawUp(e) {
  * exactly while its border and label render at native pixel size — no
  * counter-scaling, no bitmap-scale blur on composite layers.
  */
-function bboxScreenStyle(det) {
+function bboxScreenStyle(det: Detection): any {
   const wrap = wrapRef.value
   const { w: bw, h: bh } = baseSize.value
   if (!wrap || !bw || !bh) return null
-  const [x, y, w, h] = det.bbox
+  const x= det.bbox.minX, y = det.bbox.minY, h = det.bbox.height, w = det.bbox.width
   const baseX = (wrap.clientWidth  - bw) / 2
   const baseY = (wrap.clientHeight - bh) / 2
   const z     = zoom.value
@@ -757,11 +761,11 @@ function resetZoom() {
  * Auto-zoom the viewport so that `det.bbox` fills ~CROP_FILL_FRACTION of
  * whichever view dimension the bbox is longer in, then centre the bbox.
  */
-function zoomToDetection(det) {
+function zoomToDetection(det: Detection) {
   const wrap = wrapRef.value
   const { w: baseW, h: baseH } = baseSize.value
   if (!wrap || !baseW || !baseH || !det?.bbox) return
-  const [bx, by, bw, bh] = det.bbox
+  const bx=det.bbox.minX, by=det.bbox.minY, bw=det.bbox.width, bh = det.bbox.height
   const bboxPxW = bw * baseW
   const bboxPxH = bh * baseH
   if (bboxPxW <= 0 || bboxPxH <= 0) return
@@ -803,8 +807,10 @@ function onCropClick(i, det) {
 /** Quick-delete from the crop carousel. Mirrors the editor's Delete
  *  button — no confirm, since the user has to be in edit mode and
  *  explicitly click the X overlay. */
-async function quickDeleteDetection(det) {
+async function quickDeleteDetection(det: Detection) {
   if (!det || !det.id) return
+  console.log(det.id)
+  console.log(det.parent.detections)
   try {
     const res = await apiFetch(
       `/api/predictions/detections?path=${encodeURIComponent(props.image.filepath)}&id=${encodeURIComponent(det.id)}`,

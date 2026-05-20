@@ -9,20 +9,23 @@
     />
 
     <!-- Tier 1: top-5 candidates from this photo -->
-    <section v-if="!query && tierOne.length" class="species-picker__section">
+    <section v-if="!query && tierOne.size" class="species-picker__section">
       <h4 class="species-picker__heading">From this photo</h4>
       <button
-        v-for="cls in tierOne"
-        :key="cls.common_name"
+        v-for="[item,score] in tierOne"
+        :key="Kind.label(item)"
         type="button"
         class="species-picker__row"
-        :class="{ 'species-picker__row--selected': selected === cls.common_name }"
-        @click="$emit('select', { common_name: cls.common_name, scientific: cls.scientific })"
+
+        :class="{ 'species-picker__row--selected': selected === Kind.label(item) }"
+        @click="$emit('select', { common_name: Kind.label(item),
+         scientific: Kind.getSpecies(item)?.scientific })"
       >
-        <span class="species-picker__label">{{ cap(cls.common_name) }}</span>
-        <span v-if="cls.scientific" class="species-picker__sci">{{ cls.scientific }}</span>
-        <span v-if="cls.score != null" class="species-picker__score">
-          {{ (cls.score * 100).toFixed(0) }}%
+        <span class="species-picker__label">{{ cap(Kind.label(item)) }}</span>
+        <span v-if="Kind.getSpecies(item)?.scientific" class="species-picker__sci">
+          {{ Kind.getSpecies(item)?.scientific }}</span>
+        <span v-if="score" class="species-picker__score">
+          {{ (score.valueOf() * 100).toFixed(0) }}%
         </span>
       </button>
     </section>
@@ -136,14 +139,15 @@
   </div>
 </template>
 
-<script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+<script setup lang="ts">
+import {ref, computed, onMounted, watch, ComputedRef} from 'vue'
 import { apiFetch } from '../firebase.js'
+import {Category, Kind, Taxon} from "../model/model.ts";
 
 const props = defineProps({
   // From useSpeciesCatalog
-  topFive:    { type: Array,  default: () => [] },
-  flatSpecies:{ type: Array,  default: () => [] },
+  topFive:    { type: Map<Kind, number>,  default: () => {} },
+  flatSpecies:{ type: Array<Taxon>,  default: () => [] },
   addCustom:  { type: Function, required: true },
   // Currently-selected common_name (for highlight)
   selected:   { type: String, default: '' },
@@ -263,7 +267,8 @@ watch([newCommon, newScientific], () => {
   lookupError.value = ''
 })
 
-const tierOne = computed(() => props.topFive)
+const tierOne: ComputedRef<Map<Kind, Number>> = computed(() => props.topFive)
+
 
 const filteredFlat = computed(() => {
   const q = query.value.trim().toLowerCase()

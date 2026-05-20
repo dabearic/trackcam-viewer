@@ -1,10 +1,10 @@
 <template>
   <aside class="filterbar">
-    <div v-if="folders.length" class="filterbar__section">
+    <div class="filterbar__section">
       <label class="filterbar__label">Folder</label>
-      <select class="filterbar__select" :value="filters.folder" @change="emit('update', { folder: $event.target.value })">
+      <select class="filterbar__select" :value="filters.folder" @change="emit('update', { folder: $event.target })">
         <option value="">All folders</option>
-        <option v-for="f in folders" :key="f" :value="f">{{ f }}</option>
+        <option v-for="f in folders" :key="f.label()" :value="f">{{ f.label() }}</option>
       </select>
     </div>
 
@@ -26,21 +26,21 @@
           type="button"
           class="filterbar__combo-clear"
           title="Clear species filter"
-          @mousedown.prevent="selectSpecies('')"
+          @mousedown.prevent="selectSpecies(null)"
         >✕</button>
         <ul v-if="speciesOpen" class="filterbar__combo-list">
           <li
             class="filterbar__combo-item"
             :class="{ 'is-active': filters.species === '' }"
-            @mousedown.prevent="selectSpecies('')"
+            @mousedown.prevent="selectSpecies(null)"
           >All species</li>
           <li
             v-for="s in filteredSpecies"
-            :key="s"
+            :key="s.common_name"
             class="filterbar__combo-item"
             :class="{ 'is-active': filters.species === s }"
             @mousedown.prevent="selectSpecies(s)"
-          >{{ capitalize(s) }}</li>
+          >{{ capitalize(s.common_name) }}</li>
           <li v-if="filteredSpecies.length === 0" class="filterbar__combo-empty">No matches</li>
         </ul>
       </div>
@@ -56,27 +56,33 @@
         class="filterbar__range"
         :value="filters.minConfidence"
         min="0" max="100" step="5"
-        @input="emit('update', { minConfidence: +$event.target.value })"
+        @input="emit('update', { minConfidence: $event.target['value'] })"
       />
     </div>
 
     <div class="filterbar__section">
       <label class="filterbar__label">Date range</label>
+      <label for="from">From</label>
       <input
+          id="from"
         type="date"
+        title="From"
         class="filterbar__date"
-        :value="filters.dateFrom"
-        :min="dateFromMin"
-        :max="filters.dateTo || dateToMax"
-        @change="emit('update', { dateFrom: $event.target.value })"
+        :value="fmt.format(filters.dateFrom)"
+        :min="fmt.format(dateFromMin)"
+        :max="fmt.format(filters.dateTo || dateToMax)"
+        @change="emit('update', { dateFrom: Date.parse($event.target['value']) })"
       />
+
       <input
         type="date"
+        title="To"
         class="filterbar__date"
-        :value="filters.dateTo"
-        :min="filters.dateFrom || dateFromMin"
-        :max="dateToMax"
-        @change="emit('update', { dateTo: $event.target.value })"
+        placeholder="any"
+        :value="fmt.format(filters.dateTo)"
+        :min="fmt.format(filters.dateFrom || dateFromMin)"
+        :max="dateToMax.toDateString()"
+        @change="emit('update', { dateTo: Date.parse($event.target['value']) })"
       />
     </div>
 
@@ -114,20 +120,27 @@
       </div>
     </div>
 
-    <div v-if="filters.hour !== null" class="filterbar__section">
-      <label class="filterbar__label">Hour filter</label>
-      <div class="filterbar__chip">
-        {{ filters.hour }}:00–{{ filters.hour }}:59
-        <button class="filterbar__chip-clear" @click="emit('update', { hour: null })">✕</button>
-      </div>
+    <div class="filterbar__section">
+      <ShowHideSection name="hour of day filter" on-name="+" off-name="-">
+        <input type="range" min="0" max="23" class="filterbar__chip" @change="emit('update', {hourMax: $event.target['value']})"/>
+        <button class="filterbar__chip-clear" @click="emit('update', { hourMin: 0, hourMax:23 })">✕</button>
+      </ShowHideSection>
     </div>
 
-    <div v-if="filters.month !== null" class="filterbar__section">
+    <div class="filterbar__section">
       <label class="filterbar__label">Month filter</label>
-      <div class="filterbar__chip">
-        {{ MONTH_NAMES[filters.month] }}
-        <button class="filterbar__chip-clear" @click="emit('update', { month: null })">✕</button>
+      <div class="filterbar__checks">
+      <label v-for="(m,i) in MONTH_NAMES" class="filterbar__chip">
+        <input
+            type="checkbox"
+            :title="m"
+            :checked="filters.months.includes(i)"
+            @change="$event.target['value'] ? filters.months.push(i) : filters.months.remove(i) && emit('update', {months: filters.months})"
+        />
+        {{m}}
+      </label>
       </div>
+      <button class="filterbar__chip-clear" @click="emit('update', { months: [] })">✕</button>
     </div>
 
     <div class="filterbar__footer">
@@ -137,36 +150,38 @@
   </aside>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import {Area, CameraPosition, Taxon} from "../model/model.ts";
+import ShowHideSection from "./ShowHideSection.vue";
 
 const props = defineProps({
-  species: Array,
-  folders: { type: Array, default: () => [] },
+  species: Array<Taxon>,
+  folders: { type: Array<CameraPosition>, default: () => [] },
   filters: Object,
   total: Number,
   filtered: Number,
-  dateFromMin: String,
-  dateToMax: String,
+  dateFromMin: Date,
+  dateToMax: Date,
 })
-
 const emit = defineEmits(['update'])
-
+const fmt = ref(new Intl.DateTimeFormat("sv-SV",  {year:"numeric", month:"2-digit", day:"2-digit"}))
+console.log(fmt.value.format(new Date()))
 const speciesInput = ref(null)
-const speciesQuery = ref(capitalize(props.filters.species))
-const speciesOpen  = ref(false)
+const speciesQuery = ref<string>(capitalize(props.filters.species))
+const speciesOpen  = ref<boolean>(false)
 
 watch(() => props.filters.species, (sp) => {
   if (!speciesOpen.value) speciesQuery.value = capitalize(sp)
 })
 
-const filteredSpecies = computed(() => {
+const filteredSpecies = computed((): Array<Taxon> => {
   const q = speciesQuery.value.trim().toLowerCase()
   const selectedDisplay = capitalize(props.filters.species).toLowerCase()
   // When the input still shows the current selection, list everything so the
   // user can browse without having to clear first.
   if (!q || q === selectedDisplay) return props.species
-  return props.species.filter(s => s.toLowerCase().includes(q))
+  return props.species.filter((s: Taxon) => s.common_name.toLowerCase().indexOf(q) > 0)
 })
 
 function onSpeciesFocus(e) {
@@ -180,9 +195,9 @@ function closeSpecies() {
   speciesInput.value?.blur()
 }
 
-function selectSpecies(s) {
+function selectSpecies(s: Taxon) {
   emit('update', { species: s })
-  speciesQuery.value = capitalize(s)
+  speciesQuery.value = capitalize(s.common_name)
   speciesOpen.value = false
   speciesInput.value?.blur()
 }
@@ -190,7 +205,7 @@ function selectSpecies(s) {
 function commitFirstMatch() {
   const match = filteredSpecies.value[0]
   if (match) selectSpecies(match)
-  else selectSpecies('')
+  else selectSpecies(null)
 }
 
 function onDocClick(e) {
@@ -212,7 +227,7 @@ const CATEGORIES = [
 
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
-function capitalize(s) {
+function capitalize(s:string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
 }
 
@@ -221,6 +236,10 @@ function toggleCategory(key) {
     ? props.filters.categories.filter(c => c !== key)
     : [...props.filters.categories, key]
   emit('update', { categories: cats })
+}
+
+function toggleMonth(month: number) {
+  emit('update', { months: month })
 }
 
 function clearFilters() {

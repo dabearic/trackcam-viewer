@@ -1,10 +1,6 @@
 import { ref, computed } from 'vue'
 import { apiFetch } from '../firebase.js'
-
-// Common-name buckets that are NOT real species — these come from the
-// MegaDetector / SpeciesNet category fallbacks and should be hidden from
-// the species picker.
-const NON_SPECIES = new Set(['blank', 'human', 'vehicle', 'animal'])
+import {Category, ImageInfo, Kind, Source, Taxon} from "../model/model.ts";
 
 /**
  * Builds two views of the species universe for the picker UI:
@@ -19,7 +15,7 @@ const NON_SPECIES = new Set(['blank', 'human', 'vehicle', 'animal'])
  * of search-only navigation, so taxonomy parsing/grouping lives only in
  * the backend lookup endpoints now.
  */
-export function useSpeciesCatalog(predictionsRef) {
+export function useSpeciesCatalog(predictionsRef: Array<ImageInfo>) {
   const customSpecies = ref([])
   const customLoaded  = ref(false)
 
@@ -55,25 +51,28 @@ export function useSpeciesCatalog(predictionsRef) {
   }
 
   /** Distinct species across all loaded predictions + custom additions. */
-  const flatSpecies = computed(() => {
-    const seen = new Map()  // lowercased common_name → entry
-    const add = (cn, scientific, raw, extra = {}) => {
+  const flatSpecies = computed((): Taxon[] => {
+    const seen = new Map<string, any>()  // lowercased common_name → entry
+    const add = (cn: String, scientific: string, raw: string, extra = {}) => {
       if (!cn) return
-      const key = cn.toLowerCase()
-      if (NON_SPECIES.has(key) || seen.has(key)) return
+      const key: string= cn.toLowerCase()
+      if (Category.contains(key) || seen.has(key)) return
       seen.set(key, { common_name: cn, scientific: scientific || '', raw: raw || '', ...extra })
     }
-    for (const pred of predictionsRef.value ?? []) {
-      for (const cls of (pred.top5 ?? [])) {
-        add(cls.common_name, cls.scientific, cls.raw, { source: 'inferred' })
+    for (const pred of predictionsRef ?? []) {
+      for (const [cls, score] of pred.prediction.top5) {
+        if(Kind.getSpecies(cls))
+          add(Kind.label(cls), Kind.getSpecies(cls).scientific, Kind.getSpecies(cls).raw, { source: Source.INFERENCE })
       }
-      if (pred.prediction?.common_name) {
-        add(pred.prediction.common_name, pred.prediction.scientific, pred.prediction.raw, { source: 'inferred' })
+      if (pred.prediction.isSpecies()) {
+        const taxon = pred.prediction.classification as Taxon
+        add(taxon.common_name, taxon.scientific, taxon.raw, { source: 'inferred' })
       }
       // Detection-level species (manual edits store species directly on the detection)
       for (const det of (pred.detections ?? [])) {
-        if (det.label && det.category === '1') {
-          add(det.label, det.scientific, '', { source: 'detection' })
+        if (det.label && det.category == Category.ANIMAL) {
+          console.log(det)
+          add(det.label(), det.classification?.scientific, '', { source: 'detection' })
         }
       }
     }
@@ -86,9 +85,9 @@ export function useSpeciesCatalog(predictionsRef) {
   })
 
   /** Inference candidates for one image — top-5 minus non-species buckets. */
-  function topFive(image) {
-    return (image?.top5 ?? []).filter(
-      c => c.common_name && !NON_SPECIES.has(c.common_name.toLowerCase()),
+  function topFive(image: ImageInfo): Array<Taxon> {
+    return (image?.prediction?.top5Array() ?? []).filter(
+      c => c instanceof Taxon
     )
   }
 
@@ -98,7 +97,6 @@ export function useSpeciesCatalog(predictionsRef) {
     customSpecies,
     customLoaded,
     loadCustom,
-    addCustom,
-    NON_SPECIES,
+    addCustom
   }
 }
