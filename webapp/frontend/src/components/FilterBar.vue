@@ -1,6 +1,6 @@
 <template>
   <aside class="filterbar">
-    <div v-if="folders.length" class="filterbar__section">
+    <div class="filterbar__section">
       <label class="filterbar__label">Folder</label>
       <select class="filterbar__select" :value="filters.folder" @change="emit('update', { folder: $event.target })">
         <option value="">All folders</option>
@@ -62,21 +62,27 @@
 
     <div class="filterbar__section">
       <label class="filterbar__label">Date range</label>
+      <label for="from">From</label>
       <input
+          id="from"
         type="date"
+        title="From"
         class="filterbar__date"
-        :value="filters.dateFrom"
-        :min="dateFromMin as any"
-        :max="filters.dateTo || dateToMax"
-        @change="emit('update', { dateFrom: $event.target['value'] })"
+        :value="fmt.format(filters.dateFrom)"
+        :min="fmt.format(dateFromMin)"
+        :max="fmt.format(filters.dateTo || dateToMax)"
+        @change="emit('update', { dateFrom: Date.parse($event.target['value']) })"
       />
+
       <input
         type="date"
+        title="To"
         class="filterbar__date"
-        :value="filters.dateTo"
-        :min="filters.dateFrom || dateFromMin"
-        :max="dateToMax.toString()"
-        @change="emit('update', { dateTo: $event.target['value'] })"
+        placeholder="any"
+        :value="fmt.format(filters.dateTo)"
+        :min="fmt.format(filters.dateFrom || dateFromMin)"
+        :max="dateToMax.toDateString()"
+        @change="emit('update', { dateTo: Date.parse($event.target['value']) })"
       />
     </div>
 
@@ -114,20 +120,27 @@
       </div>
     </div>
 
-    <div v-if="filters.hour !== null" class="filterbar__section">
-      <label class="filterbar__label">Hour filter</label>
-      <div class="filterbar__chip">
-        {{ filters.hour }}:00–{{ filters.hour }}:59
-        <button class="filterbar__chip-clear" @click="emit('update', { hour: null })">✕</button>
-      </div>
+    <div class="filterbar__section">
+      <ShowHideSection name="hour of day filter" on-name="+" off-name="-">
+        <input type="range" min="0" max="23" class="filterbar__chip" @change="emit('update', {hourMax: $event.target['value']})"/>
+        <button class="filterbar__chip-clear" @click="emit('update', { hourMin: 0, hourMax:23 })">✕</button>
+      </ShowHideSection>
     </div>
 
-    <div v-if="filters.month !== null" class="filterbar__section">
+    <div class="filterbar__section">
       <label class="filterbar__label">Month filter</label>
-      <div class="filterbar__chip">
-        {{ MONTH_NAMES[filters.month] }}
-        <button class="filterbar__chip-clear" @click="emit('update', { month: null })">✕</button>
+      <div class="filterbar__checks">
+      <label v-for="(m,i) in MONTH_NAMES" class="filterbar__chip">
+        <input
+            type="checkbox"
+            :title="m"
+            :checked="filters.months.includes(i)"
+            @change="$event.target['value'] ? filters.months.push(i) : filters.months.remove(i) && emit('update', {months: filters.months})"
+        />
+        {{m}}
+      </label>
       </div>
+      <button class="filterbar__chip-clear" @click="emit('update', { months: [] })">✕</button>
     </div>
 
     <div class="filterbar__footer">
@@ -140,6 +153,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import {Area, CameraPosition, Taxon} from "../model/model.ts";
+import ShowHideSection from "./ShowHideSection.vue";
 
 const props = defineProps({
   species: Array<Taxon>,
@@ -150,9 +164,9 @@ const props = defineProps({
   dateFromMin: Date,
   dateToMax: Date,
 })
-
 const emit = defineEmits(['update'])
-
+const fmt = ref(new Intl.DateTimeFormat("sv-SV",  {year:"numeric", month:"2-digit", day:"2-digit"}))
+console.log(fmt.value.format(new Date()))
 const speciesInput = ref(null)
 const speciesQuery = ref<string>(capitalize(props.filters.species))
 const speciesOpen  = ref<boolean>(false)
@@ -222,6 +236,10 @@ function toggleCategory(key) {
     ? props.filters.categories.filter(c => c !== key)
     : [...props.filters.categories, key]
   emit('update', { categories: cats })
+}
+
+function toggleMonth(month: number) {
+  emit('update', { months: month })
 }
 
 function clearFilters() {

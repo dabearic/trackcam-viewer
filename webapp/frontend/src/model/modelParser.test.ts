@@ -79,5 +79,6 @@ test('parse full image', async ()=>{
     expect(value.detections.map((det) => det.category)
         .find((v)=>v == Category.ANIMAL)).toBeUndefined()
     expect(value.detections[0].confidence).toEqual(0.8775)
+    expect(value.detections[0].id).toEqual("74e7af05c0f04603a4984a28afccf322")
     expect(value.detections[1].bbox.areaPercent()).approximately(.41078, 1e-5, "Area value")
 })

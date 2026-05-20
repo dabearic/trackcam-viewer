@@ -169,7 +169,7 @@ function capitalize(s) {
   padding: 0;
   cursor: pointer;
   transition: opacity 0.15s;
-  width: 100%;
+  width: 480px;
   display: block;
 }
 

@@ -42,6 +42,7 @@ function parseDetection(detection: any, image: ImageInfo): Detection{
     let result: Detection = new Detection()
     result.category = detection.label as Category
     result.confidence = detection.conf
+    result.id = detection.id
     if(image.prediction.species() && result.category == Category.ANIMAL )
         result.classification = image.prediction.species()
     if(detection.crop_gcs_path)

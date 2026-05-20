@@ -248,7 +248,7 @@
                   'panel__det--editable': editMode,
                   'panel__det--editing':  editingDet && det.id === editingDet.id,
                 }"
-                @click="editMode && openEditorForDet(det)"
+                @click="editMode ? openEditorForDet(det) : zoomToDetection(det)"
               >
                 <span class="panel__det-dot" :style="{ background: categoryColor(det.category) }"></span>
                 <span>{{ detectionLabel(det) }}</span>
@@ -330,7 +330,7 @@ const speciesCatalog  = useSpeciesCatalog(predictionsRef.value)
 const { topFive: topFiveFor, flatSpecies, addCustom, loadCustom } = speciesCatalog
 
 const filterTypes = ref(['contrast', 'brightness', 'saturate'])
-const filterStyleText = ref({filter: 'contrast(1.8)'})
+const filterStyleText = ref({filter: ''})
 const showFilters = ref(false)
 
 function cancelDelete() {
@@ -807,8 +807,10 @@ function onCropClick(i, det) {
 /** Quick-delete from the crop carousel. Mirrors the editor's Delete
  *  button — no confirm, since the user has to be in edit mode and
  *  explicitly click the X overlay. */
-async function quickDeleteDetection(det) {
+async function quickDeleteDetection(det: Detection) {
   if (!det || !det.id) return
+  console.log(det.id)
+  console.log(det.parent.detections)
   try {
     const res = await apiFetch(
       `/api/predictions/detections?path=${encodeURIComponent(props.image.filepath)}&id=${encodeURIComponent(det.id)}`,

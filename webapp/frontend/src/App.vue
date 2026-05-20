@@ -168,7 +168,7 @@ const selectedImage: Ref<ImageInfo> = ref(null)
 const selectedDay  : Ref<Date> = ref(null)
 const showProcess  = ref(false)
 const filtersOpen  = ref(false)
-const view         = ref('species')  // 'gallery' | 'species'
+const view  : Ref<'species' | 'gallery'>       = ref('species')
 const dataDateFrom : Ref<Date> = ref(null)
 const dataDateTo   : Ref<Date> = ref(null)
 
@@ -178,15 +178,16 @@ const signingIn    = ref(false)
 const signInError  = ref('')
 
 const filters = reactive({
-  folder: null as Area,
+  folder: null as string,
   species: null as Taxon,
   minConfidence: 0,
   categories: Object.values(Category),
   categoryMode: 'any',  // 'any' | 'all'
   dateFrom: null as Date,
   dateTo: null as Date,
-  hour: null,
-  month: null,
+  hourMin: null,
+  hourMax: null,
+  months: [] as number[],
 })
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -227,13 +228,13 @@ async function loadPredictions() {
   }
 }
 
-function _updateDateBounds(preds: Array<ImageInfo>) {
-  const dates = preds.map(img => img.taken_at).filter(Boolean).sort()
+function _updateDateBounds(images: Array<ImageInfo>) {
+  const dates: Date[] = images.map(img => img.taken_at).filter(Boolean).map(s=>new Date(s)).sort()
   if (dates.length) {
-    dataDateFrom.value = dates[0]
-    dataDateTo.value   = dates[dates.length - 1]
-    filters.dateFrom   = dates[0]
-    filters.dateTo     = dates[dates.length - 1]
+    dataDateFrom.value = dates[dates.length -1 ]
+    dataDateTo.value   = dates[0]
+    filters.dateFrom   = dates[dates.length -1 ]
+    filters.dateTo     = dates[0]
   }
 }
 
@@ -243,15 +244,15 @@ function _updateDateBounds(preds: Array<ImageInfo>) {
 // level prediction adds blank/human/vehicle when it disagrees with detections,
 // and 'animal' when the species classifier produced a name without a matching
 // detection box. Used by the category filter's "all of" mode.
-function getCategories(pred: ImageInfo): Set<Category> {
+function getCategories(image: ImageInfo): Set<Category> {
   const cats = new Set<Category>()
-  for (const d of (pred.detections ?? [])) {
+  for (const d of (image.detections ?? [])) {
     if(d.category == Category.ANIMAL || d.category == Category.HUMAN
         || d.category == Category.VEHICLE)
       cats.add(d.category)
   }
-  if(!(pred.prediction.classification instanceof Taxon)) {
-    cats.add(pred.prediction.classification)
+  if(!(image.prediction.classification instanceof Taxon)) {
+    cats.add(image.prediction.classification)
   } else {
     cats.add(Category.ANIMAL)
   }
@@ -280,13 +281,17 @@ const filteredPredictions = computed(() => {
       if (!matches) return false
     }
     if (filters.minConfidence > 0 && (p.prediction?.score ?? 0) < filters.minConfidence / 100) return false
-    if (filters.hour !== null) {
+    if (filters.hourMin !== null) {
       const h = p.taken_at.getHours()
-      if (h !== filters.hour) return false
+      if (h < filters.hourMin) return false
     }
-    if (filters.month !== null) {
+    if(filters.hourMax !== null) {
+      const h = p.taken_at.getHours()
+      if (h > filters.hourMax) return false
+    }
+    if (filters.months?.length >0 ) {
       const m = p.taken_at.getMonth()
-      if (m !== filters.month) return false
+      if (!filters.months.includes(m)) return false
     }
     if (from || to) {
       const date = p.taken_at ? p.taken_at : p.uploaded
